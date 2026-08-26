@@ -116,17 +116,25 @@ app.post("/api/generate", upload.single("pdf"), async (req, res) => {
         const qrImage = await srcDoc.embedPng(qrPng);
         page.drawImage(qrImage, { x, y, width: size, height: size });
 
+function cleanWinAnsi(str) {
+  if (!str) return "";
+  return str.replace(/[^\x00-\x7F\u00A0-\u00FF]/g, "").trim();
+}
+
         const detailFilled = fillTemplate(detailText, data);
         if (detailFilled.trim()) {
           const lines = detailFilled.split("\n");
           lines.forEach((line, li) => {
-            page.drawText(line, {
-              x: x + size + 10,
-              y: y + size - 12 - li * (fSize + 3),
-              size: fSize,
-              font,
-              color: rgb(0, 0, 0),
-            });
+            const cleanLine = cleanWinAnsi(line);
+            if (cleanLine) {
+              page.drawText(cleanLine, {
+                x: x + size + 10,
+                y: y + size - 12 - li * (fSize + 3),
+                size: fSize,
+                font,
+                color: rgb(0, 0, 0),
+              });
+            }
           });
         }
       }

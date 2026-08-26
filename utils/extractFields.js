@@ -1,9 +1,10 @@
 /**
- * Extracts useful fields (SKU, Order No, Order Date, Qty, Size, Color, etc.)
+ * Extracts useful fields (SKU, Order No, Order Date, Qty, Size, Color, State, Regional Greeting)
  * from the raw text of each PDF page.
  *
  * Supports Meesho, Xpressbees, Delhivery, and standard e-commerce shipping labels.
  */
+const { resolveRegionalGreeting } = require("./regionalMessages");
 
 function get(text, regex) {
   const m = text.match(regex);
@@ -130,6 +131,9 @@ function extractFieldsFromPages(pageTexts) {
       qty = "1";
     }
 
+    // 6. Regional State & Heartwarming Greeting Resolver
+    const regionalInfo = resolveRegionalGreeting(text);
+
     return {
       page: idx + 1,
       orderNo,
@@ -140,6 +144,9 @@ function extractFieldsFromPages(pageTexts) {
       size,
       qty,
       color,
+      state: regionalInfo.state,
+      regionalThankYou: regionalInfo.message,
+      regionalLanguage: regionalInfo.language,
     };
   });
 }
