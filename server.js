@@ -92,7 +92,7 @@ app.post("/api/generate", upload.single("pdf"), async (req, res) => {
     }
 
     const srcDoc = await PDFDocument.load(req.file.buffer);
-    const font = await srcDoc.embedFont(StandardFonts.Helvetica);
+    const font = await srcDoc.embedFont(StandardFonts.TimesRomanItalic);
 
     const x = parseFloat(qrX) || 0;
     const y = parseFloat(qrY) || 0;
