@@ -66,6 +66,7 @@ app.post("/api/generate", upload.single("pdf"), async (req, res) => {
     if (!req.file) return res.status(400).json({ error: "PDF file is required" });
 
     const {
+      enableQr = "true",
       qrText = "{orderNo}",
       detailText = "",
       sortBy = "none",
@@ -79,6 +80,7 @@ app.post("/api/generate", upload.single("pdf"), async (req, res) => {
     } = req.body;
 
     const isSample = String(sampleOnly) === "true";
+    const shouldStampQr = String(enableQr) !== "false";
 
     const pageTexts = await getPerPageText(req.file.buffer);
     let fields = extractFieldsFromPages(pageTexts);
@@ -95,37 +97,38 @@ app.post("/api/generate", upload.single("pdf"), async (req, res) => {
     }
 
     const srcDoc = await PDFDocument.load(req.file.buffer);
-    const font = await srcDoc.embedFont(StandardFonts.TimesRomanItalic);
-
-    const x = parseFloat(qrX) || 0;
-    const y = parseFloat(qrY) || 0;
-    const size = parseFloat(qrSize) || 90;
-    const fSize = parseFloat(fontSize) || 8;
-
     const pages = srcDoc.getPages();
     const totalPagesToProcess = isSample ? Math.min(1, pages.length) : pages.length;
 
-    for (let i = 0; i < totalPagesToProcess; i++) {
-      const page = pages[i];
-      const data = fields[i] || {};
+    if (shouldStampQr) {
+      const font = await srcDoc.embedFont(StandardFonts.TimesRomanItalic);
+      const x = parseFloat(qrX) || 0;
+      const y = parseFloat(qrY) || 0;
+      const size = parseFloat(qrSize) || 90;
+      const fSize = parseFloat(fontSize) || 8;
 
-      const qrContent = fillTemplate(qrText, data).trim() || `Page-${i + 1}`;
-      const qrPng = await QRCode.toBuffer(qrContent, { margin: 1, width: 300 });
-      const qrImage = await srcDoc.embedPng(qrPng);
-      page.drawImage(qrImage, { x, y, width: size, height: size });
+      for (let i = 0; i < totalPagesToProcess; i++) {
+        const page = pages[i];
+        const data = fields[i] || {};
 
-      const detailFilled = fillTemplate(detailText, data);
-      if (detailFilled.trim()) {
-        const lines = detailFilled.split("\n");
-        lines.forEach((line, li) => {
-          page.drawText(line, {
-            x: x + size + 10,
-            y: y + size - 12 - li * (fSize + 3),
-            size: fSize,
-            font,
-            color: rgb(0, 0, 0),
+        const qrContent = fillTemplate(qrText, data).trim() || `Page-${i + 1}`;
+        const qrPng = await QRCode.toBuffer(qrContent, { margin: 1, width: 300 });
+        const qrImage = await srcDoc.embedPng(qrPng);
+        page.drawImage(qrImage, { x, y, width: size, height: size });
+
+        const detailFilled = fillTemplate(detailText, data);
+        if (detailFilled.trim()) {
+          const lines = detailFilled.split("\n");
+          lines.forEach((line, li) => {
+            page.drawText(line, {
+              x: x + size + 10,
+              y: y + size - 12 - li * (fSize + 3),
+              size: fSize,
+              font,
+              color: rgb(0, 0, 0),
+            });
           });
-        });
+        }
       }
     }
 
