@@ -75,7 +75,10 @@ app.post("/api/generate", upload.single("pdf"), async (req, res) => {
       qrSize = "90",
       fontSize = "8",
       overrides = "[]",
+      sampleOnly = "false",
     } = req.body;
+
+    const isSample = String(sampleOnly) === "true";
 
     const pageTexts = await getPerPageText(req.file.buffer);
     let fields = extractFieldsFromPages(pageTexts);
@@ -100,7 +103,9 @@ app.post("/api/generate", upload.single("pdf"), async (req, res) => {
     const fSize = parseFloat(fontSize) || 8;
 
     const pages = srcDoc.getPages();
-    for (let i = 0; i < pages.length; i++) {
+    const totalPagesToProcess = isSample ? Math.min(1, pages.length) : pages.length;
+
+    for (let i = 0; i < totalPagesToProcess; i++) {
       const page = pages[i];
       const data = fields[i] || {};
 
@@ -124,26 +129,45 @@ app.post("/api/generate", upload.single("pdf"), async (req, res) => {
       }
     }
 
-    // Sorting: build the new page order, then copy into a fresh document
-    let order = fields.map((_, i) => i);
-    if (sortBy !== "none") {
-      order.sort((a, b) => {
-        let va = fields[a][sortBy] ?? "";
-        let vb = fields[b][sortBy] ?? "";
-        if (sortBy === "orderDate") {
-          va = parseDdMmYyyy(va);
-          vb = parseDdMmYyyy(vb);
-        } else if (sortBy === "qty") {
-          va = parseFloat(va) || 0;
-          vb = parseFloat(vb) || 0;
-        } else {
-          va = va.toString().toLowerCase();
-          vb = vb.toString().toLowerCase();
-        }
-        if (va < vb) return sortOrder === "asc" ? -1 : 1;
-        if (va > vb) return sortOrder === "asc" ? 1 : -1;
-        return 0;
-      });
+    let order = [];
+    if (isSample) {
+      order = [0];
+    } else {
+      // Sorting: build the new page order, then copy into a fresh document
+      order = fields.map((_, i) => i);
+      if (sortBy !== "none") {
+        order.sort((a, b) => {
+          const itemA = fields[a];
+          const itemB = fields[b];
+
+          if (sortBy === "sku") {
+            const skuA = (itemA.sku || "").toString().toLowerCase();
+            const skuB = (itemB.sku || "").toString().toLowerCase();
+            if (skuA < skuB) return sortOrder === "asc" ? -1 : 1;
+            if (skuA > skuB) return sortOrder === "asc" ? 1 : -1;
+            // Secondary Sort: Higher Quantity comes first
+            const qtyA = parseFloat(itemA.qty) || 0;
+            const qtyB = parseFloat(itemB.qty) || 0;
+            return qtyB - qtyA;
+          }
+
+          let va = itemA[sortBy] ?? "";
+          let vb = itemB[sortBy] ?? "";
+          if (sortBy === "orderDate") {
+            va = parseDdMmYyyy(va);
+            vb = parseDdMmYyyy(vb);
+          } else if (sortBy === "qty") {
+            va = parseFloat(va) || 0;
+            vb = parseFloat(vb) || 0;
+          } else {
+            va = va.toString().toLowerCase();
+            vb = vb.toString().toLowerCase();
+          }
+          if (va < vb) return sortOrder === "asc" ? -1 : 1;
+          if (va > vb) return sortOrder === "asc" ? 1 : -1;
+          return 0;
+        });
+      }
     }
 
     const outDoc = await PDFDocument.create();
@@ -151,10 +175,11 @@ app.post("/api/generate", upload.single("pdf"), async (req, res) => {
     copiedPages.forEach((p) => outDoc.addPage(p));
     const outBytes = await outDoc.save();
 
+    const filename = isSample ? "sample_test_page_1.pdf" : "labels_processed.pdf";
     res.setHeader("Content-Type", "application/pdf");
     res.setHeader(
       "Content-Disposition",
-      'attachment; filename="labels_processed.pdf"'
+      `attachment; filename="${filename}"`
     );
     res.send(Buffer.from(outBytes));
   } catch (err) {
