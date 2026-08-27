@@ -10,6 +10,10 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
+app.get("/health", (req, res) => {
+  res.json({ status: "ok", message: "LABCOM Backend is live and auto-deployed via GitHub Actions!" });
+});
+
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 30 * 1024 * 1024 }, // 30 MB
