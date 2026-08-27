@@ -66,6 +66,61 @@ function cleanWinAnsi(str) {
   return str.replace(/[^\x00-\x7F\u00A0-\u00FF]/g, "").trim();
 }
 
+function wrapText(text, maxWidth, font, fontSize) {
+  if (!text) return [];
+  const rawLines = text.split("\n");
+  const wrappedLines = [];
+
+  for (const rawLine of rawLines) {
+    const clean = cleanWinAnsi(rawLine);
+    if (!clean) {
+      wrappedLines.push("");
+      continue;
+    }
+
+    if (maxWidth <= 0 || font.widthOfTextAtSize(clean, fontSize) <= maxWidth) {
+      wrappedLines.push(clean);
+      continue;
+    }
+
+    const words = clean.split(/\s+/);
+    let currentLine = "";
+
+    for (const word of words) {
+      if (!word) continue;
+      const testLine = currentLine ? `${currentLine} ${word}` : word;
+      const testWidth = font.widthOfTextAtSize(testLine, fontSize);
+
+      if (testWidth <= maxWidth) {
+        currentLine = testLine;
+      } else {
+        if (currentLine) {
+          wrappedLines.push(currentLine);
+          currentLine = word;
+        } else {
+          // If a single word exceeds maxWidth, break character by character
+          let piece = "";
+          for (const char of word) {
+            if (font.widthOfTextAtSize(piece + char, fontSize) <= maxWidth) {
+              piece += char;
+            } else {
+              if (piece) wrappedLines.push(piece);
+              piece = char;
+            }
+          }
+          currentLine = piece;
+        }
+      }
+    }
+
+    if (currentLine) {
+      wrappedLines.push(currentLine);
+    }
+  }
+
+  return wrappedLines;
+}
+
 // Default templates seed
 const DEFAULT_TEMPLATES = [
   {
@@ -181,17 +236,23 @@ app.post("/api/generate", upload.single("pdf"), async (req, res) => {
 
         const detailFilled = fillTemplate(detailText, data);
         if (detailFilled.trim()) {
-          const lines = detailFilled.split("\n");
-          lines.forEach((line, li) => {
-            const cleanLine = cleanWinAnsi(line);
+          const pageWidth = page.getWidth();
+          const textX = x + size + 10;
+          const maxWidth = Math.max(40, pageWidth - textX - 10);
+          const lines = wrapText(detailFilled, maxWidth, font, fSize);
+
+          lines.forEach((cleanLine, li) => {
             if (cleanLine) {
-              page.drawText(cleanLine, {
-                x: x + size + 10,
-                y: y + size - 12 - li * (fSize + 3),
-                size: fSize,
-                font,
-                color: rgb(0, 0, 0),
-              });
+              const textY = y + size - 12 - li * (fSize + 3);
+              if (textY >= 0) {
+                page.drawText(cleanLine, {
+                  x: textX,
+                  y: textY,
+                  size: fSize,
+                  font,
+                  color: rgb(0, 0, 0),
+                });
+              }
             }
           });
         }
