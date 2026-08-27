@@ -1,7 +1,7 @@
 const express = require("express");
 const multer = require("multer");
 const cors = require("cors");
-const pdfParse = require("pdf-parse");
+const pdfParse = require("pdf-parse"); 
 const { PDFDocument, rgb, StandardFonts } = require("pdf-lib");
 const QRCode = require("qrcode");
 const { extractFieldsFromPages } = require("./utils/extractFields");
