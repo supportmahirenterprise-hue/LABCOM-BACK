@@ -241,9 +241,16 @@ app.post("/api/generate", upload.single("pdf"), async (req, res) => {
           const maxWidth = Math.max(40, pageWidth - textX - 10);
           const lines = wrapText(detailFilled, maxWidth, font, fSize);
 
+          const lineHeight = fSize + 3;
+          const totalTextHeight = (lines.length - 1) * lineHeight + fSize;
+          
+          // Vertically center the text block with respect to the QR code height
+          const qrCenterY = y + size / 2;
+          const startY = qrCenterY + totalTextHeight / 2 - fSize * 0.85;
+
           lines.forEach((cleanLine, li) => {
             if (cleanLine) {
-              const textY = y + size - 12 - li * (fSize + 3);
+              const textY = startY - li * lineHeight;
               if (textY >= 0) {
                 page.drawText(cleanLine, {
                   x: textX,
