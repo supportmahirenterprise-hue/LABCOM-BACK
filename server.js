@@ -78,7 +78,7 @@ function wrapText(text, maxWidth, font, fontSize) {
       continue;
     }
 
-    if (maxWidth <= 0 || font.widthOfTextAtSize(clean, fontSize) <= maxWidth) {
+    if (maxWidth <= 0) {
       wrappedLines.push(clean);
       continue;
     }
@@ -88,6 +88,29 @@ function wrapText(text, maxWidth, font, fontSize) {
 
     for (const word of words) {
       if (!word) continue;
+
+      const wordWidth = font.widthOfTextAtSize(word, fontSize);
+
+      // If a single word or URL exceeds maxWidth by itself
+      if (wordWidth > maxWidth) {
+        if (currentLine) {
+          wrappedLines.push(currentLine);
+          currentLine = "";
+        }
+        let piece = "";
+        for (const char of word) {
+          if (font.widthOfTextAtSize(piece + char, fontSize) <= maxWidth) {
+            piece += char;
+          } else {
+            if (piece) wrappedLines.push(piece);
+            piece = char;
+          }
+        }
+        currentLine = piece;
+        continue;
+      }
+
+      // Normal word that fits within maxWidth
       const testLine = currentLine ? `${currentLine} ${word}` : word;
       const testWidth = font.widthOfTextAtSize(testLine, fontSize);
 
@@ -96,20 +119,8 @@ function wrapText(text, maxWidth, font, fontSize) {
       } else {
         if (currentLine) {
           wrappedLines.push(currentLine);
-          currentLine = word;
-        } else {
-          // If a single word exceeds maxWidth, break character by character
-          let piece = "";
-          for (const char of word) {
-            if (font.widthOfTextAtSize(piece + char, fontSize) <= maxWidth) {
-              piece += char;
-            } else {
-              if (piece) wrappedLines.push(piece);
-              piece = char;
-            }
-          }
-          currentLine = piece;
         }
+        currentLine = word;
       }
     }
 
@@ -238,7 +249,7 @@ app.post("/api/generate", upload.single("pdf"), async (req, res) => {
         if (detailFilled.trim()) {
           const pageWidth = page.getWidth();
           const textX = x + size + 10;
-          const maxWidth = Math.max(40, pageWidth - textX - 10);
+          const maxWidth = Math.max(30, pageWidth - textX - 15);
           const lines = wrapText(detailFilled, maxWidth, font, fSize);
 
           const lineHeight = fSize + 3;
