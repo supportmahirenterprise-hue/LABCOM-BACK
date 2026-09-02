@@ -266,7 +266,9 @@ app.post("/api/preview", upload.single("pdf"), async (req, res) => {
 // 2. Upload PDF + config, stamp QR/details, reorder pages, return processed PDF
 app.post("/api/generate", upload.single("pdf"), async (req, res) => {
   try {
-    if (!req.file) return res.status(400).json({ error: "PDF file is required" });
+    if (!req.file || !req.file.buffer || req.file.buffer.length === 0) {
+      return res.status(400).json({ error: "PDF file is required and cannot be empty" });
+    }
 
     const {
       enableQr = "true",
@@ -296,8 +298,11 @@ app.post("/api/generate", upload.single("pdf"), async (req, res) => {
     } catch (e) {
       overrideData = [];
     }
-    if (Array.isArray(overrideData) && overrideData.length === fields.length) {
-      fields = fields.map((f, i) => ({ ...f, ...overrideData[i] }));
+    if (Array.isArray(overrideData) && overrideData.length > 0) {
+      fields = fields.map((f, i) => {
+        const ov = overrideData[i] || overrideData.find((o) => o && o.page === i + 1) || {};
+        return { ...f, ...ov };
+      });
     }
 
     const srcDoc = await PDFDocument.load(req.file.buffer);
