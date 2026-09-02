@@ -11,13 +11,14 @@ function get(text, regex) {
   return m ? m[1].trim() : "";
 }
 
-function extractFieldsFromPages(pageTexts) {
+function extractFieldsFromPages(pageTexts, useNativeScript = false) {
   return pageTexts.map((rawText, idx) => {
     const text = rawText || "";
     const lines = text
       .split(/[\r\n]+/)
       .map((l) => l.trim())
       .filter(Boolean);
+
 
     // 1. Order No
     let orderNo =
@@ -132,7 +133,7 @@ function extractFieldsFromPages(pageTexts) {
     }
 
     // 6. Regional State & Heartwarming Greeting Resolver
-    const regionalInfo = resolveRegionalGreeting(text);
+    const regionalInfo = resolveRegionalGreeting(text, useNativeScript);
 
     return {
       page: idx + 1,
@@ -145,8 +146,10 @@ function extractFieldsFromPages(pageTexts) {
       qty,
       color,
       state: regionalInfo.state,
-      regionalThankYou: regionalInfo.message,
-      regionalLanguage: regionalInfo.language,
+      regionalThankYou: regionalInfo.regionalThankYou,
+      regionalThankYouLatin: regionalInfo.regionalThankYouLatin,
+      regionalThankYouNative: regionalInfo.regionalThankYouNative,
+      regionalLanguage: regionalInfo.regionalLanguage,
     };
   });
 }

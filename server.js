@@ -9,9 +9,69 @@ const { ObjectId } = require("mongodb");
 const { getDb } = require("./db");
 const { extractFieldsFromPages } = require("./utils/extractFields");
 
+const { Resvg } = require("@resvg/resvg-js");
+
 const app = express();
 app.use(cors());
 app.use(express.json());
+
+async function drawTextOrImageLine(page, srcDoc, text, x, y, size, font, color) {
+  const isUnicode = /[^\x00-\x7F]/.test(text);
+
+  if (isUnicode) {
+    try {
+      const textEscaped = text
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;");
+
+      const fontSizePx = Math.round(size * 3.2);
+      const svgHeightPx = Math.round(fontSizePx * 1.6);
+      const svgWidthPx = Math.max(300, Math.round(text.length * fontSizePx * 1.1));
+
+      const svg = `<svg width="${svgWidthPx}" height="${svgHeightPx}" xmlns="http://www.w3.org/2000/svg">
+        <style>
+          .txt {
+            font-family: 'Nirmala UI', 'Noto Sans', 'Segoe UI', sans-serif;
+            font-size: ${fontSizePx}px;
+            font-weight: bold;
+            fill: #000000;
+          }
+        </style>
+        <text x="0" y="${fontSizePx}" class="txt">${textEscaped}</text>
+      </svg>`;
+
+      const resvg = new Resvg(svg, { fitTo: { mode: 'height', value: svgHeightPx } });
+      const pngBuffer = resvg.render().asPng();
+      const pngImg = await srcDoc.embedPng(pngBuffer);
+
+      const renderHeight = size * 1.2;
+      const renderWidth = (svgWidthPx / svgHeightPx) * renderHeight;
+
+      page.drawImage(pngImg, {
+        x: x,
+        y: y - 1,
+        width: renderWidth,
+        height: renderHeight,
+      });
+      return;
+    } catch (e) {
+      console.error("Native SVG render error:", e);
+      text = text.replace(/[^\x00-\x7F]/g, "");
+    }
+  }
+
+  if (text.trim()) {
+    page.drawText(text, {
+      x,
+      y,
+      size,
+      font,
+      color: color || rgb(0, 0, 0),
+    });
+  }
+}
+
 
 // Helper to get authenticated user email from header or query or body
 function getUserEmail(req) {
@@ -63,7 +123,16 @@ function parseDdMmYyyy(str) {
 
 function cleanWinAnsi(str) {
   if (!str) return "";
-  return str.replace(/[^\x00-\x7F\u00A0-\u00FF]/g, "").trim();
+  return str.trim();
+}
+
+function getTextWidthSafe(font, text, fontSize) {
+  try {
+    const asciiEquivalent = text.replace(/[^\x00-\x7F]/g, "A");
+    return font.widthOfTextAtSize(asciiEquivalent, fontSize);
+  } catch (e) {
+    return text.length * fontSize * 0.6;
+  }
 }
 
 function wrapText(text, maxWidth, font, fontSize) {
@@ -72,7 +141,7 @@ function wrapText(text, maxWidth, font, fontSize) {
   const wrappedLines = [];
 
   for (const rawLine of rawLines) {
-    const clean = cleanWinAnsi(rawLine);
+    const clean = rawLine ? rawLine.trim() : "";
     if (!clean) {
       wrappedLines.push("");
       continue;
@@ -89,7 +158,7 @@ function wrapText(text, maxWidth, font, fontSize) {
     for (const word of words) {
       if (!word) continue;
 
-      const wordWidth = font.widthOfTextAtSize(word, fontSize);
+      const wordWidth = getTextWidthSafe(font, word, fontSize);
 
       // If a single word or URL exceeds maxWidth by itself
       if (wordWidth > maxWidth) {
@@ -99,7 +168,7 @@ function wrapText(text, maxWidth, font, fontSize) {
         }
         let piece = "";
         for (const char of word) {
-          if (font.widthOfTextAtSize(piece + char, fontSize) <= maxWidth) {
+          if (getTextWidthSafe(font, piece + char, fontSize) <= maxWidth) {
             piece += char;
           } else {
             if (piece) wrappedLines.push(piece);
@@ -112,7 +181,7 @@ function wrapText(text, maxWidth, font, fontSize) {
 
       // Normal word that fits within maxWidth
       const testLine = currentLine ? `${currentLine} ${word}` : word;
-      const testWidth = font.widthOfTextAtSize(testLine, fontSize);
+      const testWidth = getTextWidthSafe(font, testLine, fontSize);
 
       if (testWidth <= maxWidth) {
         currentLine = testLine;
@@ -181,8 +250,12 @@ const DEFAULT_TEMPLATES = [
 app.post("/api/preview", upload.single("pdf"), async (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ error: "PDF file is required" });
+    const useNative =
+      req.body?.useNativeScript === "true" ||
+      req.query?.useNativeScript === "true" ||
+      req.body?.useNativeScript === true;
     const pageTexts = await getPerPageText(req.file.buffer);
-    const fields = extractFieldsFromPages(pageTexts);
+    const fields = extractFieldsFromPages(pageTexts, useNative);
     res.json({ pageCount: fields.length, pages: fields });
   } catch (err) {
     console.error(err);
@@ -197,6 +270,7 @@ app.post("/api/generate", upload.single("pdf"), async (req, res) => {
 
     const {
       enableQr = "true",
+      useNativeScript = "false",
       qrText = "{orderNo}",
       detailText = "",
       sortBy = "none",
@@ -209,11 +283,12 @@ app.post("/api/generate", upload.single("pdf"), async (req, res) => {
       sampleOnly = "false",
     } = req.body;
 
+    const isNativeScript = String(useNativeScript) === "true";
     const isSample = String(sampleOnly) === "true";
     const shouldStampQr = String(enableQr) !== "false";
 
     const pageTexts = await getPerPageText(req.file.buffer);
-    let fields = extractFieldsFromPages(pageTexts);
+    let fields = extractFieldsFromPages(pageTexts, isNativeScript);
 
     let overrideData = [];
     try {
@@ -259,20 +334,24 @@ app.post("/api/generate", upload.single("pdf"), async (req, res) => {
           const qrCenterY = y + size / 2;
           const startY = qrCenterY + totalTextHeight / 2 - fSize * 0.85;
 
-          lines.forEach((cleanLine, li) => {
+          for (let li = 0; li < lines.length; li++) {
+            const cleanLine = lines[li];
             if (cleanLine) {
               const textY = startY - li * lineHeight;
               if (textY >= 0) {
-                page.drawText(cleanLine, {
-                  x: textX,
-                  y: textY,
-                  size: fSize,
+                await drawTextOrImageLine(
+                  page,
+                  srcDoc,
+                  cleanLine,
+                  textX,
+                  textY,
+                  fSize,
                   font,
-                  color: rgb(0, 0, 0),
-                });
+                  rgb(0, 0, 0)
+                );
               }
             }
-          });
+          }
         }
       }
     }
