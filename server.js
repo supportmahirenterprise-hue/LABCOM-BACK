@@ -58,7 +58,7 @@ async function drawTextOrImageLine(page, srcDoc, text, x, y, size, font, color, 
         const resvg = new Resvg(svg, {
           fitTo: { mode: 'height', value: svgHeightPx },
           font: {
-            loadSystemFonts: true,
+            loadSystemFonts: false,
             fontBuffers: indianFontBuffers,
             defaultFontFamily: 'Nirmala UI',
           },
