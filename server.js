@@ -9,7 +9,17 @@ const { ObjectId } = require("mongodb");
 const { getDb } = require("./db");
 const { extractFieldsFromPages } = require("./utils/extractFields");
 
+const path = require("path");
+const fs = require("fs");
 const { Resvg } = require("@resvg/resvg-js");
+
+let indianFontBuffers = [];
+const localFontPath = path.join(__dirname, "fonts", "Nirmala.ttf");
+if (fs.existsSync(localFontPath)) {
+  indianFontBuffers.push(fs.readFileSync(localFontPath));
+} else if (fs.existsSync("C:\\Windows\\Fonts\\Nirmala.ttf")) {
+  indianFontBuffers.push(fs.readFileSync("C:\\Windows\\Fonts\\Nirmala.ttf"));
+}
 
 const app = express();
 app.use(cors());
@@ -45,7 +55,14 @@ async function drawTextOrImageLine(page, srcDoc, text, x, y, size, font, color, 
           <text x="0" y="${fontSizePx}" class="txt">${textEscaped}</text>
         </svg>`;
 
-        const resvg = new Resvg(svg, { fitTo: { mode: 'height', value: svgHeightPx } });
+        const resvg = new Resvg(svg, {
+          fitTo: { mode: 'height', value: svgHeightPx },
+          font: {
+            loadSystemFonts: true,
+            fontBuffers: indianFontBuffers,
+            defaultFontFamily: 'Nirmala UI',
+          },
+        });
         const pngBuffer = resvg.render().asPng();
         const pngImg = await srcDoc.embedPng(pngBuffer);
 
