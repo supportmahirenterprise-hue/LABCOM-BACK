@@ -111,10 +111,21 @@ function getUserEmail(req) {
 }
 
 app.get("/health", (req, res) => {
-  res.json({ status: "ok", message: "LABCOM Backend is live and healthy!" });
+  res.json({
+    status: "ok",
+    version: "1.0.1-font-cache-fix",
+    fontLoaded: indianFontBuffers.length > 0,
+    message: "LABCOM Backend is live and healthy!",
+  });
 });
 
-app.get("/api/health", (req, res) => res.json({ ok: true }));
+app.get("/api/health", (req, res) =>
+  res.json({
+    ok: true,
+    version: "1.0.1-font-cache-fix",
+    fontLoaded: indianFontBuffers.length > 0,
+  })
+);
 
 const upload = multer({
   storage: multer.memoryStorage(),
