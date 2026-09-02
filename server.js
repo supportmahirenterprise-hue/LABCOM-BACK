@@ -15,44 +15,54 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-async function drawTextOrImageLine(page, srcDoc, text, x, y, size, font, color) {
+async function drawTextOrImageLine(page, srcDoc, text, x, y, size, font, color, imageCache = null) {
   const isUnicode = /[^\x00-\x7F]/.test(text);
 
   if (isUnicode) {
     try {
-      const textEscaped = text
-        .replace(/&/g, "&amp;")
-        .replace(/</g, "&lt;")
-        .replace(/>/g, "&gt;");
+      const cacheKey = `${text}_${size}`;
+      let cached = imageCache ? imageCache.get(cacheKey) : null;
 
-      const fontSizePx = Math.round(size * 3.2);
-      const svgHeightPx = Math.round(fontSizePx * 1.6);
-      const svgWidthPx = Math.max(300, Math.round(text.length * fontSizePx * 1.1));
+      if (!cached) {
+        const textEscaped = text
+          .replace(/&/g, "&amp;")
+          .replace(/</g, "&lt;")
+          .replace(/>/g, "&gt;");
 
-      const svg = `<svg width="${svgWidthPx}" height="${svgHeightPx}" xmlns="http://www.w3.org/2000/svg">
-        <style>
-          .txt {
-            font-family: 'Nirmala UI', 'Noto Sans', 'Segoe UI', sans-serif;
-            font-size: ${fontSizePx}px;
-            font-weight: bold;
-            fill: #000000;
-          }
-        </style>
-        <text x="0" y="${fontSizePx}" class="txt">${textEscaped}</text>
-      </svg>`;
+        const fontSizePx = Math.round(size * 3.2);
+        const svgHeightPx = Math.round(fontSizePx * 1.6);
+        const svgWidthPx = Math.max(300, Math.round(text.length * fontSizePx * 1.1));
 
-      const resvg = new Resvg(svg, { fitTo: { mode: 'height', value: svgHeightPx } });
-      const pngBuffer = resvg.render().asPng();
-      const pngImg = await srcDoc.embedPng(pngBuffer);
+        const svg = `<svg width="${svgWidthPx}" height="${svgHeightPx}" xmlns="http://www.w3.org/2000/svg">
+          <style>
+            .txt {
+              font-family: 'Nirmala UI', 'Noto Sans', 'Segoe UI', sans-serif;
+              font-size: ${fontSizePx}px;
+              font-weight: bold;
+              fill: #000000;
+            }
+          </style>
+          <text x="0" y="${fontSizePx}" class="txt">${textEscaped}</text>
+        </svg>`;
 
-      const renderHeight = size * 1.2;
-      const renderWidth = (svgWidthPx / svgHeightPx) * renderHeight;
+        const resvg = new Resvg(svg, { fitTo: { mode: 'height', value: svgHeightPx } });
+        const pngBuffer = resvg.render().asPng();
+        const pngImg = await srcDoc.embedPng(pngBuffer);
 
-      page.drawImage(pngImg, {
+        const renderHeight = size * 1.2;
+        const renderWidth = (svgWidthPx / svgHeightPx) * renderHeight;
+
+        cached = { pngImg, renderWidth, renderHeight };
+        if (imageCache) {
+          imageCache.set(cacheKey, cached);
+        }
+      }
+
+      page.drawImage(cached.pngImg, {
         x: x,
         y: y - 1,
-        width: renderWidth,
-        height: renderHeight,
+        width: cached.renderWidth,
+        height: cached.renderHeight,
       });
       return;
     } catch (e) {
@@ -316,13 +326,20 @@ app.post("/api/generate", upload.single("pdf"), async (req, res) => {
       const size = parseFloat(qrSize) || 90;
       const fSize = parseFloat(fontSize) || 8;
 
+      const qrImageCache = new Map();
+      const unicodeImageCache = new Map();
+
       for (let i = 0; i < totalPagesToProcess; i++) {
         const page = pages[i];
         const data = fields[i] || {};
 
         const qrContent = fillTemplate(qrText, data).trim() || `Page-${i + 1}`;
-        const qrPng = await QRCode.toBuffer(qrContent, { margin: 1, width: 300 });
-        const qrImage = await srcDoc.embedPng(qrPng);
+        let qrImage = qrImageCache.get(qrContent);
+        if (!qrImage) {
+          const qrPng = await QRCode.toBuffer(qrContent, { margin: 1, width: 300 });
+          qrImage = await srcDoc.embedPng(qrPng);
+          qrImageCache.set(qrContent, qrImage);
+        }
         page.drawImage(qrImage, { x, y, width: size, height: size });
 
         const detailFilled = fillTemplate(detailText, data);
@@ -352,7 +369,8 @@ app.post("/api/generate", upload.single("pdf"), async (req, res) => {
                   textY,
                   fSize,
                   font,
-                  rgb(0, 0, 0)
+                  rgb(0, 0, 0),
+                  unicodeImageCache
                 );
               }
             }
