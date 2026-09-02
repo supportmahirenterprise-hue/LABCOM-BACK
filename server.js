@@ -14,12 +14,42 @@ const fs = require("fs");
 const { Resvg } = require("@resvg/resvg-js");
 
 let indianFontBuffers = [];
-const localFontPath = path.join(__dirname, "fonts", "Nirmala.ttf");
-if (fs.existsSync(localFontPath)) {
-  indianFontBuffers.push(fs.readFileSync(localFontPath));
-} else if (fs.existsSync("C:\\Windows\\Fonts\\Nirmala.ttf")) {
-  indianFontBuffers.push(fs.readFileSync("C:\\Windows\\Fonts\\Nirmala.ttf"));
+const fontsDir = path.join(__dirname, "fonts");
+
+function loadFontsFromDir(dirPath) {
+  if (fs.existsSync(dirPath)) {
+    try {
+      const files = fs.readdirSync(dirPath);
+      for (const file of files) {
+        if (/\.(ttf|otf|ttc)$/i.test(file)) {
+          try {
+            const buf = fs.readFileSync(path.join(dirPath, file));
+            indianFontBuffers.push(buf);
+            console.log(`[FontLoader] Loaded font: ${file} (${buf.length} bytes)`);
+          } catch (e) {
+            console.error(`[FontLoader] Failed to read font ${file}:`, e.message);
+          }
+        }
+      }
+    } catch (e) {
+      console.error(`[FontLoader] Error reading directory ${dirPath}:`, e.message);
+    }
+  }
 }
+
+// 1. Load fonts from local backend/fonts/ directory
+loadFontsFromDir(fontsDir);
+
+// 2. Fallbacks for system font directories
+if (indianFontBuffers.length === 0 && process.platform === "win32") {
+  loadFontsFromDir("C:\\Windows\\Fonts");
+} else if (indianFontBuffers.length === 0 && process.platform === "linux") {
+  loadFontsFromDir("/usr/share/fonts");
+  loadFontsFromDir("/usr/share/fonts/truetype");
+  loadFontsFromDir("/usr/local/share/fonts");
+}
+
+console.log(`[FontLoader] Total font buffers ready: ${indianFontBuffers.length}`);
 
 const app = express();
 app.use(cors());
