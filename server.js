@@ -99,7 +99,8 @@ async function drawTextOrImageLine(page, srcDoc, text, x, y, size, font, color, 
         const svg = `<svg width="${svgWidthPx}" height="${svgHeightPx}" xmlns="http://www.w3.org/2000/svg">
           <style>
             .txt {
-              font-family: 'Nirmala UI', 'Noto Sans Devanagari', 'Noto Sans Gujarati', 'Noto Sans Tamil', 'Noto Sans Bengali', 'Noto Sans Telugu', 'Noto Sans Kannada', 'Noto Sans Malayalam', 'Noto Sans Gurmukhi', 'Noto Sans Odia', 'Noto Sans', 'Segoe UI', sans-serif;
+
+            font-family: 'Nirmala UI', 'Nirmala', 'NirmalaUI', 'Noto Sans Devanagari', 'Noto Sans Gujarati', 'Noto Sans Tamil', 'Noto Sans Bengali', 'Noto Sans Telugu', 'Noto Sans Kannada', 'Noto Sans Malayalam', 'Noto Sans Gurmukhi', 'Noto Sans Odia', 'Noto Sans', 'Segoe UI', 'DejaVu Sans', sans-serif;
               font-size: ${fontSizePx}px;
               font-weight: bold;
               fill: #000000;
@@ -109,11 +110,11 @@ async function drawTextOrImageLine(page, srcDoc, text, x, y, size, font, color, 
         </svg>`;
 
         const fontOpts = {
-          loadSystemFonts: indianFontBuffers.length === 0,
+          loadSystemFonts: true,
+          defaultFontFamily: 'Nirmala UI',
         };
         if (indianFontBuffers.length > 0) {
           fontOpts.fontBuffers = indianFontBuffers;
-          fontOpts.defaultFontFamily = 'Nirmala UI';
         }
 
         const resvg = new Resvg(svg, {
@@ -170,7 +171,7 @@ function getUserEmail(req) {
 app.get("/health", (req, res) => {
   res.json({
     status: "ok",
-    version: "1.0.2-regional-font-fix",
+    version: "1.0.3-resvg-system-font-fix",
     fontLoaded: indianFontBuffers.length > 0,
     message: "LABCOM Backend is live and healthy!",
   });
@@ -179,7 +180,7 @@ app.get("/health", (req, res) => {
 app.get("/api/health", (req, res) =>
   res.json({
     ok: true,
-    version: "1.0.2-regional-font-fix",
+    version: "1.0.3-resvg-system-font-fix",
     fontLoaded: indianFontBuffers.length > 0,
   })
 );
