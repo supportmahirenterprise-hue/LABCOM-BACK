@@ -16,29 +16,33 @@ const { Resvg } = require("@resvg/resvg-js");
 let indianFontBuffers = [];
 const fontsDir = path.join(__dirname, "fonts");
 
-function loadFontsFromDir(dirPath, isSystemFallback = false) {
-  if (fs.existsSync(dirPath)) {
-    try {
-      const files = fs.readdirSync(dirPath);
-      for (const file of files) {
-        if (/\.(ttf|otf|ttc)$/i.test(file)) {
-          if (isSystemFallback) {
-            const isIndicFont = /nirmala|noto|mangal|latha|gautami|kartika|vrinda|raavi|kalinga|batang|arundhati|shruti/i.test(file);
-            if (!isIndicFont) continue;
-          }
-          if (indianFontBuffers.length >= 10) break;
-          try {
-            const buf = fs.readFileSync(path.join(dirPath, file));
-            indianFontBuffers.push(buf);
-            console.log(`[FontLoader] Loaded font: ${file} (${buf.length} bytes)`);
-          } catch (e) {
-            console.error(`[FontLoader] Failed to read font ${file}:`, e.message);
-          }
+function loadFontsFromDir(dirPath, isSystemFallback = false, depth = 0) {
+  if (depth > 4) return;
+  if (!fs.existsSync(dirPath)) return;
+
+  try {
+    const entries = fs.readdirSync(dirPath, { withFileTypes: true });
+    for (const entry of entries) {
+      if (indianFontBuffers.length >= 10) break;
+      const fullPath = path.join(dirPath, entry.name);
+      if (entry.isDirectory()) {
+        loadFontsFromDir(fullPath, isSystemFallback, depth + 1);
+      } else if (entry.isFile() && /\.(ttf|otf|ttc)$/i.test(entry.name)) {
+        if (isSystemFallback) {
+          const isIndicFont = /nirmala|noto|mangal|latha|gautami|kartika|vrinda|raavi|kalinga|batang|arundhati|shruti|deva|gujr|taml|telu|knda|mlym|beng|guru|orya/i.test(entry.name);
+          if (!isIndicFont) continue;
+        }
+        try {
+          const buf = fs.readFileSync(fullPath);
+          indianFontBuffers.push(buf);
+          console.log(`[FontLoader] Loaded font: ${entry.name} (${buf.length} bytes)`);
+        } catch (e) {
+          console.error(`[FontLoader] Failed to read font ${entry.name}:`, e.message);
         }
       }
-    } catch (e) {
-      console.error(`[FontLoader] Error reading directory ${dirPath}:`, e.message);
     }
+  } catch (e) {
+    console.error(`[FontLoader] Error reading directory ${dirPath}:`, e.message);
   }
 }
 
@@ -52,6 +56,7 @@ if (indianFontBuffers.length === 0 && process.platform === "win32") {
   loadFontsFromDir("/usr/share/fonts", true);
   loadFontsFromDir("/usr/share/fonts/truetype", true);
   loadFontsFromDir("/usr/local/share/fonts", true);
+  loadFontsFromDir("~/.fonts", true);
 }
 
 console.log(`[FontLoader] Total font buffers ready: ${indianFontBuffers.length}`);
@@ -94,7 +99,7 @@ async function drawTextOrImageLine(page, srcDoc, text, x, y, size, font, color, 
         const svg = `<svg width="${svgWidthPx}" height="${svgHeightPx}" xmlns="http://www.w3.org/2000/svg">
           <style>
             .txt {
-              font-family: 'Nirmala UI', 'Noto Sans', 'Segoe UI', sans-serif;
+              font-family: 'Nirmala UI', 'Noto Sans Devanagari', 'Noto Sans Gujarati', 'Noto Sans Tamil', 'Noto Sans Bengali', 'Noto Sans Telugu', 'Noto Sans Kannada', 'Noto Sans Malayalam', 'Noto Sans Gurmukhi', 'Noto Sans Odia', 'Noto Sans', 'Segoe UI', sans-serif;
               font-size: ${fontSizePx}px;
               font-weight: bold;
               fill: #000000;
@@ -103,13 +108,17 @@ async function drawTextOrImageLine(page, srcDoc, text, x, y, size, font, color, 
           <text x="0" y="${fontSizePx}" class="txt">${textEscaped}</text>
         </svg>`;
 
+        const fontOpts = {
+          loadSystemFonts: indianFontBuffers.length === 0,
+        };
+        if (indianFontBuffers.length > 0) {
+          fontOpts.fontBuffers = indianFontBuffers;
+          fontOpts.defaultFontFamily = 'Nirmala UI';
+        }
+
         const resvg = new Resvg(svg, {
           fitTo: { mode: 'height', value: svgHeightPx },
-          font: {
-            loadSystemFonts: false,
-            fontBuffers: indianFontBuffers,
-            defaultFontFamily: 'Nirmala UI',
-          },
+          font: fontOpts,
         });
         const pngBuffer = resvg.render().asPng();
         const pngImg = await srcDoc.embedPng(pngBuffer);
