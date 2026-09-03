@@ -16,12 +16,17 @@ const { Resvg } = require("@resvg/resvg-js");
 let indianFontBuffers = [];
 const fontsDir = path.join(__dirname, "fonts");
 
-function loadFontsFromDir(dirPath) {
+function loadFontsFromDir(dirPath, isSystemFallback = false) {
   if (fs.existsSync(dirPath)) {
     try {
       const files = fs.readdirSync(dirPath);
       for (const file of files) {
         if (/\.(ttf|otf|ttc)$/i.test(file)) {
+          if (isSystemFallback) {
+            const isIndicFont = /nirmala|noto|mangal|latha|gautami|kartika|vrinda|raavi|kalinga|batang|arundhati|shruti/i.test(file);
+            if (!isIndicFont) continue;
+          }
+          if (indianFontBuffers.length >= 10) break;
           try {
             const buf = fs.readFileSync(path.join(dirPath, file));
             indianFontBuffers.push(buf);
@@ -38,15 +43,15 @@ function loadFontsFromDir(dirPath) {
 }
 
 // 1. Load fonts from local backend/fonts/ directory
-loadFontsFromDir(fontsDir);
+loadFontsFromDir(fontsDir, false);
 
 // 2. Fallbacks for system font directories
 if (indianFontBuffers.length === 0 && process.platform === "win32") {
-  loadFontsFromDir("C:\\Windows\\Fonts");
+  loadFontsFromDir("C:\\Windows\\Fonts", true);
 } else if (indianFontBuffers.length === 0 && process.platform === "linux") {
-  loadFontsFromDir("/usr/share/fonts");
-  loadFontsFromDir("/usr/share/fonts/truetype");
-  loadFontsFromDir("/usr/local/share/fonts");
+  loadFontsFromDir("/usr/share/fonts", true);
+  loadFontsFromDir("/usr/share/fonts/truetype", true);
+  loadFontsFromDir("/usr/local/share/fonts", true);
 }
 
 console.log(`[FontLoader] Total font buffers ready: ${indianFontBuffers.length}`);
@@ -248,7 +253,8 @@ function wrapText(text, maxWidth, font, fontSize) {
           currentLine = "";
         }
         let piece = "";
-        for (const char of word) {
+        const chars = Array.from(word);
+        for (const char of chars) {
           if (getTextWidthSafe(font, piece + char, fontSize) <= maxWidth) {
             piece += char;
           } else {
