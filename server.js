@@ -170,7 +170,7 @@ function getUserEmail(req) {
 app.get("/health", (req, res) => {
   res.json({
     status: "ok",
-    version: "1.0.1-font-cache-fix",
+    version: "1.0.2-regional-font-fix",
     fontLoaded: indianFontBuffers.length > 0,
     message: "LABCOM Backend is live and healthy!",
   });
@@ -179,7 +179,7 @@ app.get("/health", (req, res) => {
 app.get("/api/health", (req, res) =>
   res.json({
     ok: true,
-    version: "1.0.1-font-cache-fix",
+    version: "1.0.2-regional-font-fix",
     fontLoaded: indianFontBuffers.length > 0,
   })
 );
