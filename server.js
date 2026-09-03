@@ -13,53 +13,18 @@ const path = require("path");
 const fs = require("fs");
 const { Resvg } = require("@resvg/resvg-js");
 
-let indianFontBuffers = [];
 const fontsDir = path.join(__dirname, "fonts");
 
-function loadFontsFromDir(dirPath, isSystemFallback = false, depth = 0) {
-  if (depth > 4) return;
-  if (!fs.existsSync(dirPath)) return;
+const systemFontDirs = [
+  fontsDir,
+  process.platform === "win32" ? "C:\\Windows\\Fonts" : "",
+  "/usr/share/fonts",
+  "/usr/share/fonts/truetype",
+  "/usr/local/share/fonts",
+  "~/.fonts",
+].filter((d) => d && fs.existsSync(d));
 
-  try {
-    const entries = fs.readdirSync(dirPath, { withFileTypes: true });
-    for (const entry of entries) {
-      if (indianFontBuffers.length >= 10) break;
-      const fullPath = path.join(dirPath, entry.name);
-      if (entry.isDirectory()) {
-        loadFontsFromDir(fullPath, isSystemFallback, depth + 1);
-      } else if (entry.isFile() && /\.(ttf|otf|ttc)$/i.test(entry.name)) {
-        if (isSystemFallback) {
-          const isIndicFont = /nirmala|noto|mangal|latha|gautami|kartika|vrinda|raavi|kalinga|batang|arundhati|shruti|deva|gujr|taml|telu|knda|mlym|beng|guru|orya/i.test(entry.name);
-          if (!isIndicFont) continue;
-        }
-        try {
-          const buf = fs.readFileSync(fullPath);
-          indianFontBuffers.push(buf);
-          console.log(`[FontLoader] Loaded font: ${entry.name} (${buf.length} bytes)`);
-        } catch (e) {
-          console.error(`[FontLoader] Failed to read font ${entry.name}:`, e.message);
-        }
-      }
-    }
-  } catch (e) {
-    console.error(`[FontLoader] Error reading directory ${dirPath}:`, e.message);
-  }
-}
-
-// 1. Load fonts from local backend/fonts/ directory
-loadFontsFromDir(fontsDir, false);
-
-// 2. Fallbacks for system font directories
-if (indianFontBuffers.length === 0 && process.platform === "win32") {
-  loadFontsFromDir("C:\\Windows\\Fonts", true);
-} else if (indianFontBuffers.length === 0 && process.platform === "linux") {
-  loadFontsFromDir("/usr/share/fonts", true);
-  loadFontsFromDir("/usr/share/fonts/truetype", true);
-  loadFontsFromDir("/usr/local/share/fonts", true);
-  loadFontsFromDir("~/.fonts", true);
-}
-
-console.log(`[FontLoader] Total font buffers ready: ${indianFontBuffers.length}`);
+console.log(`[FontLoader] Configured font directories for Resvg:`, systemFontDirs);
 
 const app = express();
 app.use(
@@ -99,8 +64,7 @@ async function drawTextOrImageLine(page, srcDoc, text, x, y, size, font, color, 
         const svg = `<svg width="${svgWidthPx}" height="${svgHeightPx}" xmlns="http://www.w3.org/2000/svg">
           <style>
             .txt {
-
-            font-family: 'Nirmala UI', 'Nirmala', 'NirmalaUI', 'Noto Sans Devanagari', 'Noto Sans Gujarati', 'Noto Sans Tamil', 'Noto Sans Bengali', 'Noto Sans Telugu', 'Noto Sans Kannada', 'Noto Sans Malayalam', 'Noto Sans Gurmukhi', 'Noto Sans Odia', 'Noto Sans', 'Segoe UI', 'DejaVu Sans', sans-serif;
+              font-family: 'Nirmala UI', 'Nirmala', 'NirmalaUI', 'Noto Sans Devanagari', 'Noto Sans Gujarati', 'Noto Sans Tamil', 'Noto Sans Bengali', 'Noto Sans Telugu', 'Noto Sans Kannada', 'Noto Sans Malayalam', 'Noto Sans Gurmukhi', 'Noto Sans Odia', 'Noto Sans', 'Segoe UI', 'DejaVu Sans', sans-serif;
               font-size: ${fontSizePx}px;
               font-weight: bold;
               fill: #000000;
@@ -111,11 +75,9 @@ async function drawTextOrImageLine(page, srcDoc, text, x, y, size, font, color, 
 
         const fontOpts = {
           loadSystemFonts: true,
+          fontDirs: systemFontDirs,
           defaultFontFamily: 'Nirmala UI',
         };
-        if (indianFontBuffers.length > 0) {
-          fontOpts.fontBuffers = indianFontBuffers;
-        }
 
         const resvg = new Resvg(svg, {
           fitTo: { mode: 'height', value: svgHeightPx },
@@ -171,8 +133,8 @@ function getUserEmail(req) {
 app.get("/health", (req, res) => {
   res.json({
     status: "ok",
-    version: "1.0.3-resvg-system-font-fix",
-    fontLoaded: indianFontBuffers.length > 0,
+    version: "1.0.4-native-fontdirs-fix",
+    fontDirsConfigured: systemFontDirs.length,
     message: "LABCOM Backend is live and healthy!",
   });
 });
@@ -180,8 +142,8 @@ app.get("/health", (req, res) => {
 app.get("/api/health", (req, res) =>
   res.json({
     ok: true,
-    version: "1.0.3-resvg-system-font-fix",
-    fontLoaded: indianFontBuffers.length > 0,
+    version: "1.0.4-native-fontdirs-fix",
+    fontDirsConfigured: systemFontDirs.length,
   })
 );
 
