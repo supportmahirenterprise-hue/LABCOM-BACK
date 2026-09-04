@@ -11,7 +11,7 @@ const { extractFieldsFromPages } = require("./utils/extractFields");
 
 const path = require("path");
 const fs = require("fs");
-const { Resvg } = require("@resvg/resvg-js");
+const { createCanvas, GlobalFonts } = require("@napi-rs/canvas");
 
 const fontsDir = path.join(__dirname, "fonts");
 
@@ -24,7 +24,24 @@ const systemFontDirs = [
   "~/.fonts",
 ].filter((d) => d && fs.existsSync(d));
 
-console.log(`[FontLoader] Configured font directories for Resvg:`, systemFontDirs);
+function initCanvasFonts() {
+  const fontPaths = [
+    path.join(fontsDir, "Nirmala.ttf"),
+    "C:\\Windows\\Fonts\\Nirmala.ttf",
+    "C:\\Windows\\Fonts\\Nirmalab.ttf",
+  ];
+  fontPaths.forEach((fp) => {
+    if (fs.existsSync(fp)) {
+      try {
+        GlobalFonts.registerFromPath(fp, "Nirmala UI");
+        console.log(`[FontLoader] Registered canvas font: ${fp}`);
+      } catch (e) {
+        console.error(`[FontLoader] Failed to register font ${fp}:`, e.message);
+      }
+    }
+  });
+}
+initCanvasFonts();
 
 const app = express();
 app.use(
@@ -52,58 +69,55 @@ async function drawTextOrImageLine(page, srcDoc, text, x, y, size, font, color, 
       let cached = imageCache ? imageCache.get(cacheKey) : null;
 
       if (!cached) {
-        const textEscaped = text
-          .replace(/&/g, "&amp;")
-          .replace(/</g, "&lt;")
-          .replace(/>/g, "&gt;");
+        const scaleFactor = 4; // High DPI (300+ DPI) for crisp thermal printing
+        const fontSizePx = Math.round(size * scaleFactor);
 
-        const fontSizePx = Math.round(size * 3.2);
-        const svgHeightPx = Math.round(fontSizePx * 1.6);
-        const svgWidthPx = Math.max(300, Math.round(text.length * fontSizePx * 1.1));
+        const tempCanvas = createCanvas(10, 10);
+        const tempCtx = tempCanvas.getContext("2d");
+        const fontStyle = `bold ${fontSizePx}px "Nirmala UI", "Segoe UI", sans-serif`;
+        tempCtx.font = fontStyle;
+        const metrics = tempCtx.measureText(text);
 
-        const svg = `<svg width="${svgWidthPx}" height="${svgHeightPx}" xmlns="http://www.w3.org/2000/svg">
-          <style>
-            .txt {
-              font-family: 'Nirmala UI', 'Nirmala', 'NirmalaUI', 'Noto Sans Devanagari', 'Noto Sans Gujarati', 'Noto Sans Tamil', 'Noto Sans Bengali', 'Noto Sans Telugu', 'Noto Sans Kannada', 'Noto Sans Malayalam', 'Noto Sans Gurmukhi', 'Noto Sans Odia', 'Noto Sans', 'Segoe UI', 'DejaVu Sans', sans-serif;
-              font-size: ${fontSizePx}px;
-              font-weight: bold;
-              fill: #000000;
-            }
-          </style>
-          <text x="0" y="${fontSizePx}" class="txt">${textEscaped}</text>
-        </svg>`;
+        const padX = Math.ceil(4 * scaleFactor);
+        const padY = Math.ceil(4 * scaleFactor);
+        const canvasWidth = Math.max(100, Math.ceil(metrics.width + padX * 2));
+        const canvasHeight = Math.max(20, Math.ceil(fontSizePx * 1.5 + padY * 2));
 
-        const fontOpts = {
-          loadSystemFonts: true,
-          fontDirs: systemFontDirs,
-          defaultFontFamily: 'Nirmala UI',
-        };
+        const canvas = createCanvas(canvasWidth, canvasHeight);
+        const ctx = canvas.getContext("2d");
 
-        const resvg = new Resvg(svg, {
-          fitTo: { mode: 'height', value: svgHeightPx },
-          font: fontOpts,
-        });
-        const pngBuffer = resvg.render().asPng();
+        ctx.font = fontStyle;
+        ctx.fillStyle = "#000000";
+        ctx.textBaseline = "middle";
+        ctx.fillText(text, padX, canvasHeight / 2);
+
+        const pngBuffer = canvas.toBuffer("image/png");
         const pngImg = await srcDoc.embedPng(pngBuffer);
 
-        const renderHeight = size * 1.2;
-        const renderWidth = (svgWidthPx / svgHeightPx) * renderHeight;
+        const renderHeight = canvasHeight / scaleFactor;
+        const renderWidth = canvasWidth / scaleFactor;
 
-        cached = { pngImg, renderWidth, renderHeight };
+        cached = {
+          pngImg,
+          renderWidth,
+          renderHeight,
+          padX: padX / scaleFactor,
+          padY: padY / scaleFactor,
+        };
         if (imageCache) {
           imageCache.set(cacheKey, cached);
         }
       }
 
       page.drawImage(cached.pngImg, {
-        x: x,
+        x: x - cached.padX,
         y: y - 1,
         width: cached.renderWidth,
         height: cached.renderHeight,
       });
       return;
     } catch (e) {
-      console.error("Native SVG render error:", e);
+      console.error("Canvas Indic text render error:", e);
       text = text.replace(/[^\x00-\x7F]/g, "");
     }
   }
