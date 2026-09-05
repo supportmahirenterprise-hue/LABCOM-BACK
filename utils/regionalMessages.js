@@ -58,7 +58,7 @@ const STATE_MESSAGES = {
   Assam: {
     language: "Assamese",
     message: "Dhonyobad! Aponar morom aru orderor babe dhonyobad!",
-    nativeMessage: "ধন্যবাদ! আপোনাৰ মৰম আৰু অৰ୍ਡৰৰ বাবে ধন্যবাদ!",
+    nativeMessage: "ধন্যবাদ! আপোনাৰ মৰম আৰু অৰ্ডৰৰ বাবে ধন্যবাদ!",
   },
   Rajasthan: {
     language: "Hindi",
