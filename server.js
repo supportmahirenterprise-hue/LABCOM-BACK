@@ -58,7 +58,8 @@ app.use(
   })
 );
 app.options("*", cors());
-app.use(express.json());
+app.use(express.json({ limit: "100mb" }));
+app.use(express.urlencoded({ limit: "100mb", extended: true }));
 
 async function drawTextOrImageLine(page, srcDoc, text, x, y, size, font, color, imageCache = null) {
   const isUnicode = /[^\x00-\x7F]/.test(text);
@@ -163,7 +164,7 @@ app.get("/api/health", (req, res) =>
 
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 30 * 1024 * 1024 }, // 30 MB
+  limits: { fileSize: 100 * 1024 * 1024, fieldSize: 100 * 1024 * 1024 }, // 100 MB
 });
 
 // ---- helpers -------------------------------------------------------------
