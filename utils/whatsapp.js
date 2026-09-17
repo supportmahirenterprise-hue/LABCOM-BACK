@@ -1,12 +1,22 @@
 const https = require("https");
 
-const WA_API_URL = "https://wa.lextrack.in/api/whatsapp/send-media";
-const WA_API_KEY = "wa_c6854599bd4b7a54cad78edbdd6ace51";
+const WA_API_URL = process.env.WA_API_URL || "https://wa.lextrack.in/api/whatsapp/send-media";
+const WA_API_KEY = process.env.WA_API_KEY || "wa_c6854599bd4b7a54cad78edbdd6ace51";
 const WA_BEARER_TOKEN =
+  process.env.WA_BEARER_TOKEN ||
   "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOiI2YTVkZjQ3MzBjOWQwZTA0Nzg2OTBkMDkiLCJ1c2VybmFtZSI6IlZpc2hhbCIsImlhdCI6MTc4ODc4Mjg2MSwiZXhwIjoxNzkxMzc0ODYxfQ.mfXOSRinxqUpVpXBpaLQ4wHwaz0i9_Ni7RTxOi19k-4";
-const DEFAULT_RECEIVER_NUMBER = "918140148878";
+const DEFAULT_RECEIVER_NUMBER = process.env.WA_DEFAULT_RECEIVER || "918140148878";
 
-function sendWhatsAppMedia({ number = DEFAULT_RECEIVER_NUMBER, fileData, typeName = "Media" }) {
+function sendWhatsAppMedia({
+  number = DEFAULT_RECEIVER_NUMBER,
+  fileData,
+  fileName,
+  filename,
+  caption,
+  mimeType,
+  mimetype,
+  typeName = "Media",
+}) {
   return new Promise((resolve, reject) => {
     if (!fileData) {
       return reject(new Error("Missing fileData for WhatsApp media dispatch"));
@@ -15,9 +25,21 @@ function sendWhatsAppMedia({ number = DEFAULT_RECEIVER_NUMBER, fileData, typeNam
     const rawNum = (number || DEFAULT_RECEIVER_NUMBER).toString().replace(/[^0-9]/g, "");
     const formattedNumber = rawNum.length === 10 ? `91${rawNum}` : rawNum;
 
+    const resolvedFileName = fileName || filename || "attachment.pdf";
+    const resolvedMimeType =
+      mimeType ||
+      mimetype ||
+      (fileData.startsWith("data:image") ? "image/png" : "application/pdf");
+    const resolvedCaption = caption || resolvedFileName;
+
     const payload = JSON.stringify({
       number: formattedNumber,
       fileData,
+      fileName: resolvedFileName,
+      filename: resolvedFileName,
+      caption: resolvedCaption,
+      mimeType: resolvedMimeType,
+      mimetype: resolvedMimeType,
     });
 
     const req = https.request(
