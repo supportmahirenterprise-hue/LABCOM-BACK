@@ -431,6 +431,243 @@ async function saveCustomerOrders(fields, userEmail = "guest") {
   }
 }
 
+// ---- PINCODE & DISTRICT DETECTION ENGINE -----------------------------------------
+
+const PINCODE_PREFIX_MAP = {
+  // GUJARAT (36xxxx - 39xxxx)
+  "395": { district: "Surat", state: "Gujarat" },
+  "394": { district: "Surat", state: "Gujarat" },
+  "380": { district: "Ahmedabad", state: "Gujarat" },
+  "382": { district: "Gandhinagar", state: "Gujarat" },
+  "390": { district: "Vadodara", state: "Gujarat" },
+  "391": { district: "Vadodara", state: "Gujarat" },
+  "360": { district: "Rajkot", state: "Gujarat" },
+  "364": { district: "Bhavnagar", state: "Gujarat" },
+  "361": { district: "Jamnagar", state: "Gujarat" },
+  "362": { district: "Junagadh", state: "Gujarat" },
+  "388": { district: "Anand", state: "Gujarat" },
+  "396": { district: "Valsad / Navsari", state: "Gujarat" },
+  "393": { district: "Bharuch", state: "Gujarat" },
+  "392": { district: "Bharuch", state: "Gujarat" },
+  "363": { district: "Surendranagar / Morbi", state: "Gujarat" },
+  "384": { district: "Mehsana / Patan", state: "Gujarat" },
+  "385": { district: "Banaskantha", state: "Gujarat" },
+  "383": { district: "Sabarkantha", state: "Gujarat" },
+  "387": { district: "Kheda / Nadiad", state: "Gujarat" },
+  "389": { district: "Panchmahal / Godhra", state: "Gujarat" },
+  "370": { district: "Kutch / Bhuj", state: "Gujarat" },
+  "365": { district: "Amreli", state: "Gujarat" },
+  "369": { district: "Porbandar", state: "Gujarat" },
+
+  // MAHARASHTRA (40xxxx - 44xxxx)
+  "400": { district: "Mumbai", state: "Maharashtra" },
+  "401": { district: "Thane / Palghar", state: "Maharashtra" },
+  "410": { district: "Pune / Raigad", state: "Maharashtra" },
+  "411": { district: "Pune", state: "Maharashtra" },
+  "412": { district: "Pune", state: "Maharashtra" },
+  "440": { district: "Nagpur", state: "Maharashtra" },
+  "441": { district: "Nagpur", state: "Maharashtra" },
+  "422": { district: "Nashik", state: "Maharashtra" },
+  "431": { district: "Aurangabad", state: "Maharashtra" },
+  "413": { district: "Solapur", state: "Maharashtra" },
+  "416": { district: "Kolhapur / Sangli", state: "Maharashtra" },
+  "444": { district: "Akola / Amravati", state: "Maharashtra" },
+  "435": { district: "Latur", state: "Maharashtra" },
+  "424": { district: "Dhule / Jalgaon", state: "Maharashtra" },
+  "415": { district: "Satara", state: "Maharashtra" },
+
+  // TAMIL NADU (60xxxx - 64xxxx)
+  "600": { district: "Chennai", state: "Tamil Nadu" },
+  "601": { district: "Thiruvallur / Kancheepuram", state: "Tamil Nadu" },
+  "602": { district: "Kancheepuram", state: "Tamil Nadu" },
+  "641": { district: "Coimbatore / Tiruppur", state: "Tamil Nadu" },
+  "625": { district: "Madurai", state: "Tamil Nadu" },
+  "620": { district: "Tiruchirappalli (Trichy)", state: "Tamil Nadu" },
+  "636": { district: "Salem", state: "Tamil Nadu" },
+  "632": { district: "Vellore", state: "Tamil Nadu" },
+  "638": { district: "Erode", state: "Tamil Nadu" },
+  "627": { district: "Tirunelveli", state: "Tamil Nadu" },
+  "624": { district: "Dindigul", state: "Tamil Nadu" },
+  "613": { district: "Thanjavur", state: "Tamil Nadu" },
+  "612": { district: "Kumbakonam", state: "Tamil Nadu" },
+  "628": { district: "Tuticorin (Thoothukudi)", state: "Tamil Nadu" },
+  "607": { district: "Cuddalore", state: "Tamil Nadu" },
+
+  // KARNATAKA (56xxxx - 59xxxx)
+  "560": { district: "Bengaluru", state: "Karnataka" },
+  "561": { district: "Bengaluru Rural", state: "Karnataka" },
+  "562": { district: "Bengaluru Rural", state: "Karnataka" },
+  "570": { district: "Mysuru", state: "Karnataka" },
+  "580": { district: "Hubballi-Dharwad", state: "Karnataka" },
+  "575": { district: "Mangaluru", state: "Karnataka" },
+  "590": { district: "Belagavi", state: "Karnataka" },
+  "585": { district: "Kalaburagi", state: "Karnataka" },
+  "577": { district: "Davanagere", state: "Karnataka" },
+  "583": { district: "Ballari", state: "Karnataka" },
+  "572": { district: "Tumakuru", state: "Karnataka" },
+  "576": { district: "Udupi", state: "Karnataka" },
+
+  // KERALA (67xxxx - 69xxxx)
+  "682": { district: "Kochi (Ernakulam)", state: "Kerala" },
+  "695": { district: "Thiruvananthapuram", state: "Kerala" },
+  "673": { district: "Kozhikode", state: "Kerala" },
+  "680": { district: "Thrissur", state: "Kerala" },
+  "670": { district: "Kannur", state: "Kerala" },
+  "691": { district: "Kollam", state: "Kerala" },
+  "688": { district: "Alappuzha", state: "Kerala" },
+  "678": { district: "Palakkad", state: "Kerala" },
+  "676": { district: "Malappuram", state: "Kerala" },
+  "686": { district: "Kottayam", state: "Kerala" },
+
+  // TELANGANA & ANDHRA PRADESH (50xxxx - 53xxxx)
+  "500": { district: "Hyderabad", state: "Telangana" },
+  "501": { district: "Rangareddy", state: "Telangana" },
+  "506": { district: "Warangal", state: "Telangana" },
+  "503": { district: "Nizamabad", state: "Telangana" },
+  "507": { district: "Khammam", state: "Telangana" },
+  "505": { district: "Karimnagar", state: "Telangana" },
+  "530": { district: "Visakhapatnam", state: "Andhra Pradesh" },
+  "520": { district: "Vijayawada", state: "Andhra Pradesh" },
+  "522": { district: "Guntur", state: "Andhra Pradesh" },
+  "524": { district: "Nellore", state: "Andhra Pradesh" },
+  "518": { district: "Kurnool", state: "Andhra Pradesh" },
+  "533": { district: "Rajahmundry / Kakinada", state: "Andhra Pradesh" },
+  "517": { district: "Tirupati / Chittoor", state: "Andhra Pradesh" },
+  "516": { district: "Kadapa", state: "Andhra Pradesh" },
+
+  // WEST BENGAL (70xxxx - 74xxxx)
+  "700": { district: "Kolkata", state: "West Bengal" },
+  "711": { district: "Howrah", state: "West Bengal" },
+  "713": { district: "Durgapur / Bardhaman", state: "West Bengal" },
+  "734": { district: "Siliguri / Darjeeling", state: "West Bengal" },
+  "732": { district: "Malda", state: "West Bengal" },
+  "721": { district: "Kharagpur", state: "West Bengal" },
+  "712": { district: "Hooghly", state: "West Bengal" },
+  "741": { district: "Nadia", state: "West Bengal" },
+
+  // ODISHA (75xxxx - 77xxxx)
+  "751": { district: "Bhubaneswar", state: "Odisha" },
+  "753": { district: "Cuttack", state: "Odisha" },
+  "769": { district: "Rourkela", state: "Odisha" },
+  "760": { district: "Berhampur", state: "Odisha" },
+  "768": { district: "Sambalpur", state: "Odisha" },
+  "752": { district: "Puri", state: "Odisha" },
+  "756": { district: "Balasore", state: "Odisha" },
+
+  // ASSAM (78xxxx - 79xxxx)
+  "781": { district: "Guwahati", state: "Assam" },
+  "788": { district: "Silchar", state: "Assam" },
+  "786": { district: "Dibrugarh", state: "Assam" },
+  "785": { district: "Jorhat / Sivasagar", state: "Assam" },
+  "782": { district: "Nagaon", state: "Assam" },
+  "784": { district: "Lakhimpur / Tezpur", state: "Assam" },
+
+  // PUNJAB (14xxxx - 16xxxx)
+  "141": { district: "Ludhiana", state: "Punjab" },
+  "143": { district: "Amritsar", state: "Punjab" },
+  "144": { district: "Jalandhar", state: "Punjab" },
+  "147": { district: "Patiala", state: "Punjab" },
+  "151": { district: "Bathinda", state: "Punjab" },
+  "160": { district: "Mohali / Chandigarh", state: "Punjab" },
+
+  // RAJASTHAN (30xxxx - 34xxxx)
+  "302": { district: "Jaipur", state: "Rajasthan" },
+  "342": { district: "Jodhpur", state: "Rajasthan" },
+  "324": { district: "Kota", state: "Rajasthan" },
+  "334": { district: "Bikaner", state: "Rajasthan" },
+  "305": { district: "Ajmer", state: "Rajasthan" },
+  "313": { district: "Udaipur", state: "Rajasthan" },
+  "311": { district: "Bhilwara", state: "Rajasthan" },
+  "301": { district: "Alwar", state: "Rajasthan" },
+  "332": { district: "Sikar", state: "Rajasthan" },
+
+  // GOA (403xxx)
+  "403": { district: "Panaji / North Goa", state: "Goa" },
+
+  // DELHI NCR & NORTH (11xxxx & 201xxx & 122xxx)
+  "110": { district: "New Delhi", state: "Delhi" },
+  "201": { district: "Noida / Ghaziabad", state: "Uttar Pradesh" },
+  "122": { district: "Gurugram", state: "Haryana" },
+  "121": { district: "Faridabad / Meerut", state: "Haryana / UP" },
+  "226": { district: "Lucknow", state: "Uttar Pradesh" },
+  "208": { district: "Kanpur", state: "Uttar Pradesh" },
+  "221": { district: "Varanasi", state: "Uttar Pradesh" },
+  "211": { district: "Prayagraj", state: "Uttar Pradesh" },
+  "250": { district: "Meerut", state: "Uttar Pradesh" },
+  "282": { district: "Agra", state: "Uttar Pradesh" },
+
+  // BIHAR & JHARKHAND (80xxxx - 83xxxx)
+  "800": { district: "Patna", state: "Bihar" },
+  "834": { district: "Ranchi", state: "Jharkhand" },
+  "831": { district: "Jamshedpur", state: "Jharkhand" },
+  "826": { district: "Dhanbad", state: "Jharkhand" },
+  "842": { district: "Muzaffarpur", state: "Bihar" },
+  "812": { district: "Bhagalpur", state: "Bihar" },
+
+  // MADHYA PRADESH & CHHATTISGARH (45xxxx - 49xxxx)
+  "452": { district: "Indore", state: "Madhya Pradesh" },
+  "462": { district: "Bhopal", state: "Madhya Pradesh" },
+  "482": { district: "Jabalpur", state: "Madhya Pradesh" },
+  "474": { district: "Gwalior", state: "Madhya Pradesh" },
+  "492": { district: "Raipur", state: "Chhattisgarh" },
+  "490": { district: "Bhilai", state: "Chhattisgarh" },
+};
+
+const DISTRICTS_MAP = {
+  Gujarat: ["Surat", "Ahmedabad", "Vadodara", "Rajkot", "Gandhinagar", "Bhavnagar", "Jamnagar", "Junagadh", "Anand", "Navsari", "Morbi", "Mehsana", "Bharuch", "Valsad", "Vapi", "Kheda", "Patan", "Porbandar", "Amreli", "Surendranagar", "Botad", "Dahod", "Godhra", "Gir Somnath", "Mahisagar", "Narmada", "Tapi", "Aravalli", "Banaskantha", "Sabarkantha", "Kutch", "Bhuj"],
+  Maharashtra: ["Mumbai", "Pune", "Nagpur", "Thane", "Nashik", "Aurangabad", "Solapur", "Amravati", "Kolhapur", "Navi Mumbai", "Akola", "Latur", "Dhule", "Satara", "Sangli", "Nanded", "Jalgaon", "Ratnagiri", "Palghar", "Raigad", "Ahmednagar", "Chandrapur", "Parbhani", "Beed", "Yavatmal", "Bhandara", "Gondia"],
+  TamilNadu: ["Chennai", "Coimbatore", "Madurai", "Tiruchirappalli", "Trichy", "Salem", "Tiruppur", "Vellore", "Erode", "Tirunelveli", "Kancheepuram", "Dindigul", "Thanjavur", "Tuticorin", "Thoothukudi", "Cuddalore", "Kumbakonam", "Karur", "Nagapattinam", "Namakkal", "Kanyakumari"],
+  Karnataka: ["Bengaluru", "Bangalore", "Mysuru", "Mysore", "Hubli", "Dharwad", "Mangalore", "Mangaluru", "Belgaum", "Belagavi", "Gulbarga", "Kalaburagi", "Davanagere", "Bellary", "Ballari", "Shimoga", "Shivamogga", "Tumkur", "Udupi", "Hassan", "Bidar", "Raichur"],
+  Kerala: ["Kochi", "Cochin", "Thiruvananthapuram", "Trivandrum", "Kozhikode", "Calicut", "Thrissur", "Kannur", "Kollam", "Alappuzha", "Palakkad", "Malappuram", "Kottayam", "Idukki", "Wayanad", "Kasaragod", "Pathanamthitta"],
+  Punjab: ["Ludhiana", "Amritsar", "Jalandhar", "Patiala", "Bathinda", "Mohali", "Hoshiarpur", "Batala", "Pathankot", "Firozpur", "Moga", "Abohar", "Malerkotla", "Khanna", "Phagwara"],
+  Rajasthan: ["Jaipur", "Jodhpur", "Kota", "Bikaner", "Ajmer", "Udaipur", "Bhilwara", "Alwar", "Sikar", "Pali", "Jhunjhunu", "Churu", "Barmer", "Nagaur", "Bharatpur", "Ganganagar"],
+  Assam: ["Guwahati", "Silchar", "Dibrugarh", "Jorhat", "Nagaon", "Tinsukia", "Tezpur", "Lakhimpur", "Kamrup", "Cachar", "Barpeta", "Darrang", "Dhubri", "Golaghat", "Hailakandi", "Karimganj", "Morigaon", "Sivasagar", "Sonitpur"],
+  WestBengal: ["Kolkata", "Calcutta", "Howrah", "Durgapur", "Asansol", "Siliguri", "Bardhaman", "Malda", "Kharagpur", "Hooghly", "Nadia", "Murshidabad", "Darjeeling", "Jalpaiguri", "Midnapore"],
+  Telangana: ["Hyderabad", "Secunderabad", "Warangal", "Nizamabad", "Khammam", "Karimnagar", "Ramagundam", "Suryapet", "Mahbubnagar", "Nalgonda"],
+  AndhraPradesh: ["Visakhapatnam", "Vizag", "Vijayawada", "Guntur", "Nellore", "Kurnool", "Rajahmundry", "Tirupati", "Kadapa", "Kakinada", "Eluru", "Anantapur", "Vizianagaram"],
+  Odisha: ["Bhubaneswar", "Cuttack", "Rourkela", "Berhampur", "Sambalpur", "Puri", "Balasore", "Bhadrak", "Baripada", "Jharsuguda"],
+  Goa: ["Panaji", "Panjim", "Margao", "Vasco", "Mapusa", "Ponda", "Bicholim", "Curchorem", "South Goa", "North Goa"],
+};
+
+function detectDistrict(address = "", state = "") {
+  if (!address) return "Central";
+
+  // 1. PINCODE Lookup (Highest Accuracy for all Indian Regions)
+  const pinMatch = address.match(/\b([1-8]\d{5})\b/);
+  if (pinMatch) {
+    const pin = pinMatch[1];
+    const p3 = pin.substring(0, 3);
+    if (PINCODE_PREFIX_MAP[p3]) {
+      return PINCODE_PREFIX_MAP[p3].district;
+    }
+  }
+
+  // 2. City / District Dictionary Search
+  const upperAddr = address.toUpperCase();
+  const stateKey = Object.keys(DISTRICTS_MAP).find(
+    (k) => k.toLowerCase() === (state || "").toLowerCase().replace(/\s+/g, "")
+  );
+
+  const distList = stateKey ? DISTRICTS_MAP[stateKey] : Object.values(DISTRICTS_MAP).flat();
+
+  for (const dist of distList) {
+    const reg = new RegExp(`\\b${dist.toUpperCase()}\\b`, "i");
+    if (reg.test(upperAddr)) {
+      return dist;
+    }
+  }
+
+  // 3. Token Parsing Fallback
+  const parts = address.split(/[,;\n]+/).map((p) => p.trim()).filter(Boolean);
+  if (parts.length >= 2) {
+    const candidate = parts[parts.length - 2].replace(/\d+/g, "").trim();
+    if (candidate.length > 2 && candidate.length < 25) {
+      return candidate;
+    }
+  }
+  return "Central";
+}
+
 // GET /api/customer-analysis
 app.get("/api/customer-analysis", async (req, res) => {
   try {
@@ -439,16 +676,65 @@ app.get("/api/customer-analysis", async (req, res) => {
     const search = (req.query.search || "").trim().toLowerCase();
     const repeatOnly = req.query.repeatOnly === "true";
     const selectedState = (req.query.state || "").trim();
+    const selectedDistrict = (req.query.district || "").trim();
 
     let allCustomers = await customersCol.find({}).sort({ orderCount: -1, updatedAt: -1 }).toArray();
 
-    // Unique state list for filter dropdown
-    const allStates = Array.from(new Set(allCustomers.map((c) => c.state).filter(Boolean))).sort();
+    // Attach detected district to all customer objects
+    allCustomers.forEach((c) => {
+      c.district = c.district || detectDistrict(c.address, c.state);
+    });
 
-    let customers = [...allCustomers];
+    // 1. Calculate state order counts
+    const stateCountsMap = {};
+    allCustomers.forEach((c) => {
+      const st = (c.state || "India").trim();
+      const cnt = c.orderCount || c.orders?.length || 1;
+      stateCountsMap[st] = (stateCountsMap[st] || 0) + cnt;
+    });
 
+    const allStatesWithCounts = Object.keys(stateCountsMap)
+      .sort()
+      .map((st) => ({
+        name: st,
+        count: stateCountsMap[st],
+        label: `${st} (${stateCountsMap[st]})`,
+      }));
+
+    const totalOrdersAll = Object.values(stateCountsMap).reduce((a, b) => a + b, 0);
+
+    // 2. Filter by State first
+    let stateFilteredCustomers = [...allCustomers];
     if (selectedState && selectedState.toUpperCase() !== "ALL") {
-      customers = customers.filter((c) => (c.state || "").toLowerCase() === selectedState.toLowerCase());
+      stateFilteredCustomers = stateFilteredCustomers.filter(
+        (c) => (c.state || "").toLowerCase() === selectedState.toLowerCase()
+      );
+    }
+
+    // 3. Calculate district order counts for the selected state
+    const districtCountsMap = {};
+    stateFilteredCustomers.forEach((c) => {
+      const dist = (c.district || "Central").trim();
+      const cnt = c.orderCount || c.orders?.length || 1;
+      districtCountsMap[dist] = (districtCountsMap[dist] || 0) + cnt;
+    });
+
+    const allDistrictsWithCounts = Object.keys(districtCountsMap)
+      .sort()
+      .map((dist) => ({
+        name: dist,
+        count: districtCountsMap[dist],
+        label: `${dist} (${districtCountsMap[dist]})`,
+      }));
+
+    const totalOrdersForSelectedState = Object.values(districtCountsMap).reduce((a, b) => a + b, 0);
+
+    // 4. Filter by District if specified
+    let customers = [...stateFilteredCustomers];
+    if (selectedDistrict && selectedDistrict.toUpperCase() !== "ALL") {
+      customers = customers.filter(
+        (c) => (c.district || "").toLowerCase() === selectedDistrict.toLowerCase()
+      );
     }
 
     const totalCustomers = customers.length;
@@ -462,8 +748,9 @@ app.get("/api/customer-analysis", async (req, res) => {
         const mobMatch = (c.mobileNumber || "").toLowerCase().includes(search);
         const addrMatch = (c.address || "").toLowerCase().includes(search);
         const stateMatch = (c.state || "").toLowerCase().includes(search);
+        const distMatch = (c.district || "").toLowerCase().includes(search);
         const orderMatch = c.orders?.some((o) => (o.orderNo || "").toLowerCase().includes(search));
-        return nameMatch || mobMatch || addrMatch || stateMatch || orderMatch;
+        return nameMatch || mobMatch || addrMatch || stateMatch || distMatch || orderMatch;
       });
     }
 
@@ -479,6 +766,7 @@ app.get("/api/customer-analysis", async (req, res) => {
         mobileNumber: c.mobileNumber || "N/A",
         address: c.address || "N/A",
         state: c.state || "India",
+        district: c.district || "Central",
         orderCount: cnt,
         isRepeat: cnt > 1,
         firstOrderDate: c.firstOrderDate || "",
@@ -494,7 +782,10 @@ app.get("/api/customer-analysis", async (req, res) => {
         repeatCustomersCount,
         repeatRate,
         totalOrdersProcessed,
-        allStates: allStates || [],
+        totalOrdersAll,
+        totalOrdersForSelectedState,
+        allStatesWithCounts: allStatesWithCounts || [],
+        allDistrictsWithCounts: allDistrictsWithCounts || [],
       },
       customers: formattedList,
     });
