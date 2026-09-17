@@ -797,12 +797,12 @@ app.get("/api/customer-analysis", async (req, res) => {
     });
 
     const allStatesWithCounts = Object.keys(stateCountsMap)
-      .sort()
       .map((st) => ({
         name: st,
         count: stateCountsMap[st],
         label: `${st} (${stateCountsMap[st]})`,
-      }));
+      }))
+      .sort((a, b) => b.count - a.count);
 
     const totalOrdersAll = Object.values(stateCountsMap).reduce((a, b) => a + b, 0);
 
@@ -823,12 +823,12 @@ app.get("/api/customer-analysis", async (req, res) => {
     });
 
     const allDistrictsWithCounts = Object.keys(districtCountsMap)
-      .sort()
       .map((dist) => ({
         name: dist,
         count: districtCountsMap[dist],
         label: `${dist} (${districtCountsMap[dist]})`,
-      }));
+      }))
+      .sort((a, b) => b.count - a.count);
 
     const totalOrdersForSelectedState = Object.values(districtCountsMap).reduce((a, b) => a + b, 0);
 
@@ -861,23 +861,25 @@ app.get("/api/customer-analysis", async (req, res) => {
       customers = customers.filter((c) => (c.orderCount || 1) > 1);
     }
 
-    const formattedList = customers.map((c) => {
-      const cnt = c.orderCount || c.orders?.length || 1;
-      return {
-        id: c._id.toString(),
-        name: c.name || "Customer",
-        mobileNumber: c.mobileNumber || "N/A",
-        address: c.address || "N/A",
-        state: c.state || "India",
-        district: c.district || "Central",
-        orderCount: cnt,
-        isRepeat: cnt > 1,
-        firstOrderDate: c.firstOrderDate || "",
-        lastOrderDate: c.lastOrderDate || "",
-        ordersCountText: cnt > 1 ? `${cnt} Orders` : "1 Order",
-        orders: c.orders || [],
-      };
-    });
+    const formattedList = customers
+      .map((c) => {
+        const cnt = c.orderCount || c.orders?.length || 1;
+        return {
+          id: c._id.toString(),
+          name: c.name || "Customer",
+          mobileNumber: c.mobileNumber || "N/A",
+          address: c.address || "N/A",
+          state: c.state || "India",
+          district: c.district || "Central",
+          orderCount: cnt,
+          isRepeat: cnt > 1,
+          firstOrderDate: c.firstOrderDate || "",
+          lastOrderDate: c.lastOrderDate || "",
+          ordersCountText: cnt > 1 ? `${cnt} Orders` : "1 Order",
+          orders: c.orders || [],
+        };
+      })
+      .sort((a, b) => b.orderCount - a.orderCount);
 
     res.json({
       summary: {
@@ -1121,53 +1123,109 @@ app.post("/api/generate", upload.single("pdf"), async (req, res) => {
     const filename = isSample ? `1_${dateStr}_sample_test_page_1.pdf` : `${pageCount}_${dateStr}_stamped.pdf`;
 
     // Automatically Dispatch Stamped PDF (PDF format) & Summary Report (PNG Image format) to WhatsApp (918140148878)
-    (async () => {
-      try {
-        const receiverNumber = req.body?.whatsappNumber || DEFAULT_RECEIVER_NUMBER;
-        const stampedFileName = isSample ? `1_${dateStr}_sample_test_page_1.pdf` : `${pageCount}_${dateStr}_stamped.pdf`;
-        const summaryFileName = isSample ? `1_${dateStr}_sample_summary.png` : `${pageCount}_${dateStr}_summary.png`;
+    const skipWhatsApp = req.body?.skipWhatsApp === "true";
+    if (!skipWhatsApp) {
+      (async () => {
+        try {
+          const receiverNumber = req.body?.whatsappNumber || DEFAULT_RECEIVER_NUMBER;
+          const stampedFileName = isSample ? `1_${dateStr}_sample_test_page_1.pdf` : `${pageCount}_${dateStr}_stamped.pdf`;
+          const summaryFileName = isSample ? `1_${dateStr}_sample_summary.png` : `${pageCount}_${dateStr}_summary.png`;
 
-        const sortedFields = (order || []).map((idx) => fields[idx] || {});
+          const sortedFields = (order || []).map((idx) => fields[idx] || {});
 
-        // 1. Send Stamped PDF as PDF format (data:application/pdf;base64,...) with exact filename (no text caption underneath)
-        const pdfBase64 = `data:application/pdf;base64,${Buffer.from(outBytes).toString("base64")}`;
-        await sendWhatsAppMedia({
-          number: receiverNumber,
-          fileData: pdfBase64,
-          fileName: stampedFileName,
-          filename: stampedFileName,
-          caption: "",
-          mimeType: "application/pdf",
-          typeName: "Stamped PDF",
-        });
-
-        // 1 second pause between media dispatches for gateway stability
-        await new Promise((resolve) => setTimeout(resolve, 1000));
-
-        // 2. Generate Summary PNG Image and Send via WhatsApp (data:image/png;base64,...) with exact filename
-        const dataForSummary = sortedFields.length > 0 ? sortedFields : fields;
-        if (dataForSummary && dataForSummary.length > 0) {
-          const summaryPngBase64 = generateSummaryCanvasImage(dataForSummary, req.file?.originalname || "labels.pdf");
+          // 1. Send Stamped PDF as PDF format (data:application/pdf;base64,...) with exact filename (no text caption underneath)
+          const pdfBase64 = `data:application/pdf;base64,${Buffer.from(outBytes).toString("base64")}`;
           await sendWhatsAppMedia({
             number: receiverNumber,
-            fileData: summaryPngBase64,
-            fileName: summaryFileName,
-            filename: summaryFileName,
+            fileData: pdfBase64,
+            fileName: stampedFileName,
+            filename: stampedFileName,
             caption: "",
-            mimeType: "image/png",
-            typeName: "Summary PNG Image",
+            mimeType: "application/pdf",
+            typeName: "Stamped PDF",
           });
+
+          // 1 second pause between media dispatches for gateway stability
+          await new Promise((resolve) => setTimeout(resolve, 1000));
+
+          // 2. Generate Summary PNG Image and Send via WhatsApp (data:image/png;base64,...) with exact filename
+          const dataForSummary = sortedFields.length > 0 ? sortedFields : fields;
+          if (dataForSummary && dataForSummary.length > 0) {
+            const summaryPngBase64 = generateSummaryCanvasImage(dataForSummary, req.file?.originalname || "labels.pdf");
+            await sendWhatsAppMedia({
+              number: receiverNumber,
+              fileData: summaryPngBase64,
+              fileName: summaryFileName,
+              filename: summaryFileName,
+              caption: "",
+              mimeType: "image/png",
+              typeName: "Summary PNG Image",
+            });
+          }
+        } catch (waErr) {
+          console.error("[WhatsApp Integration Error]:", waErr.message);
         }
-      } catch (waErr) {
-        console.error("[WhatsApp Integration Error]:", waErr.message);
-      }
-    })();
+      })();
+    }
 
     res.setHeader("Content-Type", "application/pdf");
     res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
     res.send(Buffer.from(outBytes));
   } catch (err) {
     console.error(err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Endpoint to dispatch final merged PDF & final summary PNG image to WhatsApp
+app.post("/api/whatsapp/dispatch-final", upload.single("pdf"), async (req, res) => {
+  req.setTimeout(600000);
+  try {
+    const receiverNumber = req.body?.whatsappNumber || DEFAULT_RECEIVER_NUMBER;
+    const fileName = req.body?.fileName || "labels.pdf";
+    let pages = [];
+    try {
+      pages = JSON.parse(req.body?.pages || "[]");
+    } catch (e) {
+      pages = [];
+    }
+
+    const totalPages = pages.length || 1;
+    const now = new Date();
+    const dateStr = `${String(now.getDate()).padStart(2, "0")}.${String(now.getMonth() + 1).padStart(2, "0")}.${now.getFullYear()}`;
+    const stampedFileName = `${totalPages}_${dateStr}_stamped.pdf`;
+    const summaryFileName = `${totalPages}_${dateStr}_summary.png`;
+
+    if (req.file && req.file.buffer && req.file.buffer.length > 0) {
+      const pdfBase64 = `data:application/pdf;base64,${req.file.buffer.toString("base64")}`;
+      await sendWhatsAppMedia({
+        number: receiverNumber,
+        fileData: pdfBase64,
+        fileName: stampedFileName,
+        filename: stampedFileName,
+        caption: "",
+        mimeType: "application/pdf",
+        typeName: "Stamped PDF",
+      });
+    }
+
+    if (pages && pages.length > 0) {
+      await new Promise((r) => setTimeout(r, 1000));
+      const summaryPngBase64 = generateSummaryCanvasImage(pages, fileName);
+      await sendWhatsAppMedia({
+        number: receiverNumber,
+        fileData: summaryPngBase64,
+        fileName: summaryFileName,
+        filename: summaryFileName,
+        caption: "",
+        mimeType: "image/png",
+        typeName: "Summary PNG Image",
+      });
+    }
+
+    res.json({ success: true, message: "Final PDF & Summary dispatched to WhatsApp successfully!" });
+  } catch (err) {
+    console.error("WhatsApp Final Dispatch Error:", err.message);
     res.status(500).json({ error: err.message });
   }
 });
