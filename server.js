@@ -1003,7 +1003,10 @@ app.post("/api/generate", upload.single("pdf"), async (req, res) => {
     copiedPages.forEach((p) => outDoc.addPage(p));
     const outBytes = await outDoc.save();
 
-    const filename = isSample ? "sample_test_page_1.pdf" : "labels_processed.pdf";
+    const now = new Date();
+    const dateStr = `${String(now.getDate()).padStart(2, "0")}.${String(now.getMonth() + 1).padStart(2, "0")}.${now.getFullYear()}`;
+    const pageCount = copiedPages.length;
+    const filename = isSample ? `1_${dateStr}_sample_test_page_1.pdf` : `${pageCount}_${dateStr}_stamped.pdf`;
     res.setHeader("Content-Type", "application/pdf");
     res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
     res.send(Buffer.from(outBytes));
@@ -1340,9 +1343,11 @@ app.post("/api/generate-summary", async (req, res) => {
     }
 
     const pdfBuffer = await generateSummaryPdf(pages, fileName);
-    const baseName = fileName.replace(/\.pdf$/i, "");
+    const now = new Date();
+    const dateStr = `${String(now.getDate()).padStart(2, "0")}.${String(now.getMonth() + 1).padStart(2, "0")}.${now.getFullYear()}`;
+    const pageCount = pages.length;
     res.setHeader("Content-Type", "application/pdf");
-    res.setHeader("Content-Disposition", `attachment; filename="${baseName}_summary.pdf"`);
+    res.setHeader("Content-Disposition", `attachment; filename="${pageCount}_${dateStr}_summary.pdf"`);
     res.send(Buffer.from(pdfBuffer));
   } catch (err) {
     console.error("Summary generation error:", err);
