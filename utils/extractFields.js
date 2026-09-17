@@ -21,16 +21,22 @@ function extractFieldsFromPages(pageTexts, useNativeScript = false) {
 
 
     // 1. Order No & Sub Order ID
-    let orderNo =
-      get(text, /Purchase Order No\.?\s*[:\s]*[\r\n]*\s*(\S+)/i) ||
-      get(text, /Order No\.?\s*[:\s]*[\r\n]*\s*(\S+)/i) ||
-      get(text, /(\d{10,}_\d+|\d{10,})/) ||
+    let subOrderNo =
+      get(text, /Order No\.?\s*[:\s]*[\r\n]*\s*(\d{10,}_\d+)/i) ||
+      (text.match(/\b(\d{10,}_\d+)\b/) ? text.match(/\b(\d{10,}_\d+)\b/)[1] : "") ||
+      get(text, /Sub\s*Order\s*(?:No|ID)\.?\s*[:\s]*[\r\n]*\s*(\S+)/i) ||
       "";
 
-    let subOrderNo =
-      get(text, /Sub\s*Order\s*(?:No|ID)\.?\s*[:\s]*[\r\n]*\s*(\S+)/i) ||
-      get(text, /SubOrderNo\.?\s*[:\s]*[\r\n]*\s*(\S+)/i) ||
-      orderNo;
+    let orderNo =
+      get(text, /Purchase Order No\.?\s*[:\s]*[\r\n]*\s*(\S+)/i) ||
+      (subOrderNo ? subOrderNo.split("_")[0] : "") ||
+      get(text, /Order No\.?\s*[:\s]*[\r\n]*\s*(\S+)/i) ||
+      get(text, /(\d{10,})/) ||
+      "";
+
+    if (!subOrderNo) {
+      subOrderNo = orderNo;
+    }
 
     // 2. Invoice No
     let invoiceNo =
@@ -68,6 +74,22 @@ function extractFieldsFromPages(pageTexts, useNativeScript = false) {
       get(text, /Order Date\s*[:\s]*[\r\n]*\s*(\d{2}[.\/]\d{2}[.\/]\d{4})/i) ||
       get(text, /(\d{2}[.\/]\d{2}[.\/]\d{4})/) ||
       "";
+
+    // 4b. Payment Type Detection (COD vs Prepaid)
+    let paymentType = "COD";
+    const isCodExplicit = /\bCOD\b|Cash\s*on\s*Delivery/i.test(text);
+    const isPrepaidExplicit = /Prepaid|Pre-paid|\bPAID\b/i.test(text);
+    const isZeroCollect = /Collect(?:able)?\s*(?:Amount|Rs\.?)?\s*[:\s]*[₹Rs.]*\s*0\b/i.test(text) || /COD\s*Amount\s*[:\s]*[₹Rs.]*\s*0\b/i.test(text);
+
+    if (isZeroCollect || (isPrepaidExplicit && !isCodExplicit)) {
+      paymentType = "Prepaid";
+    } else if (isCodExplicit) {
+      paymentType = "COD";
+    } else if (isPrepaidExplicit) {
+      paymentType = "Prepaid";
+    } else {
+      paymentType = "COD";
+    }
 
     // 5. Product Details Block Parser (SKU, Size, Qty, Color)
     let sku = "";
@@ -162,6 +184,7 @@ function extractFieldsFromPages(pageTexts, useNativeScript = false) {
       page: idx + 1,
       orderNo,
       subOrderNo,
+      paymentType,
       orderDate,
       invoiceNo,
       customerName,

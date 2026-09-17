@@ -335,6 +335,7 @@ async function saveCustomerOrders(fields, userEmail = "guest") {
       const address = (item.customerAddress || custName).trim();
       const orderNo = (item.orderNo || "").trim();
       const subOrderNo = (item.subOrderNo || orderNo).trim();
+      const paymentType = (item.paymentType || "COD").trim();
       const orderDate = item.orderDate || new Date().toISOString().slice(0, 10);
       const sku = (item.sku || "").trim();
       const qty = parseInt(item.qty, 10) || 1;
@@ -359,6 +360,7 @@ async function saveCustomerOrders(fields, userEmail = "guest") {
           await ordersCol.insertOne({
             orderNo,
             subOrderNo,
+            paymentType,
             customerName: custName,
             customerMobile: mobile,
             customerAddress: address,
@@ -377,6 +379,7 @@ async function saveCustomerOrders(fields, userEmail = "guest") {
       const newOrderObj = {
         orderNo,
         subOrderNo,
+        paymentType,
         orderDate,
         sku,
         qty,
