@@ -334,6 +334,11 @@ async function saveCustomerOrders(fields, userEmail = "guest") {
 
     const activeEmail = (userEmail || "guest").toLowerCase().trim();
 
+    // 1. Prepare items
+    const validItems = [];
+    const orderNos = new Set();
+    const custKeys = new Set();
+
     for (const item of fields) {
       const custName = (item.customerName || "").trim();
       const mobile = (item.mobileNumber || "").trim();
@@ -359,29 +364,10 @@ async function saveCustomerOrders(fields, userEmail = "guest") {
         continue;
       }
 
-      if (orderNo) {
-        const existingGlobalOrder = await ordersCol.findOne({ $or: [{ orderNo }, { subOrderNo }] });
-        if (!existingGlobalOrder) {
-          await ordersCol.insertOne({
-            orderNo,
-            subOrderNo,
-            paymentType,
-            customerName: custName,
-            customerMobile: mobile,
-            customerAddress: address,
-            state,
-            orderDate,
-            sku,
-            qty,
-            userEmail: activeEmail,
-            createdAt: new Date(),
-          });
-        }
-      }
-
-      const existingCustomer = await customersCol.findOne({ custKey });
-
-      const newOrderObj = {
+      validItems.push({
+        custName,
+        mobile,
+        address,
         orderNo,
         subOrderNo,
         paymentType,
@@ -389,53 +375,154 @@ async function saveCustomerOrders(fields, userEmail = "guest") {
         sku,
         qty,
         state,
-        address,
+        custKey,
+      });
+
+      if (orderNo) {
+        orderNos.add(orderNo);
+        orderNos.add(subOrderNo);
+      }
+      custKeys.add(custKey);
+    }
+
+    if (validItems.length === 0) return;
+
+    // 2. Batch fetch existing orders & customers
+    const existingOrdersArray = orderNos.size > 0
+      ? await ordersCol.find({ $or: [{ orderNo: { $in: Array.from(orderNos) } }, { subOrderNo: { $in: Array.from(orderNos) } }] }).toArray()
+      : [];
+    const existingOrderSet = new Set();
+    existingOrdersArray.forEach(o => {
+      if (o.orderNo) existingOrderSet.add(o.orderNo);
+      if (o.subOrderNo) existingOrderSet.add(o.subOrderNo);
+    });
+
+    const existingCustomersArray = custKeys.size > 0
+      ? await customersCol.find({ custKey: { $in: Array.from(custKeys) } }).toArray()
+      : [];
+    const customerMap = new Map();
+    existingCustomersArray.forEach(c => customerMap.set(c.custKey, c));
+
+    const orderOps = [];
+    const customerOps = [];
+
+    // Memory tracking for customer updates during this batch
+    const localCustomerState = new Map();
+
+    for (const item of validItems) {
+      // Order insert
+      if (item.orderNo && !existingOrderSet.has(item.orderNo) && !existingOrderSet.has(item.subOrderNo)) {
+        existingOrderSet.add(item.orderNo);
+        existingOrderSet.add(item.subOrderNo);
+        orderOps.push({
+          insertOne: {
+            document: {
+              orderNo: item.orderNo,
+              subOrderNo: item.subOrderNo,
+              paymentType: item.paymentType,
+              customerName: item.custName,
+              customerMobile: item.mobile,
+              customerAddress: item.address,
+              state: item.state,
+              orderDate: item.orderDate,
+              sku: item.sku,
+              qty: item.qty,
+              userEmail: activeEmail,
+              createdAt: new Date(),
+            },
+          },
+        });
+      }
+
+      // Customer update / insert
+      let custRecord = localCustomerState.get(item.custKey) || customerMap.get(item.custKey);
+      const newOrderObj = {
+        orderNo: item.orderNo,
+        subOrderNo: item.subOrderNo,
+        paymentType: item.paymentType,
+        orderDate: item.orderDate,
+        sku: item.sku,
+        qty: item.qty,
+        state: item.state,
+        address: item.address,
         processedAt: new Date(),
       };
 
-      if (existingCustomer) {
-        // STRICT RULE: If orderNo/subOrderNo is already in this customer's order history, DO NOT add duplicate & DO NOT increment orderCount!
-        const isDuplicateOrder = orderNo
-          ? existingCustomer.orders?.some((o) => o.orderNo === orderNo || (o.subOrderNo && o.subOrderNo === subOrderNo))
+      if (custRecord) {
+        const isDuplicateOrder = item.orderNo
+          ? (custRecord.orders || []).some((o) => o.orderNo === item.orderNo || (o.subOrderNo && o.subOrderNo === item.subOrderNo))
           : false;
 
         if (!isDuplicateOrder) {
-          const updatedOrders = [...(existingCustomer.orders || []), newOrderObj];
-          const newOrderCount = updatedOrders.length;
+          const updatedOrders = [...(custRecord.orders || []), newOrderObj];
+          const updatedRecord = {
+            ...custRecord,
+            name: item.custName || custRecord.name,
+            mobileNumber: item.mobile || custRecord.mobileNumber,
+            address: item.address || custRecord.address,
+            state: item.state || custRecord.state,
+            orderCount: updatedOrders.length,
+            orders: updatedOrders,
+            lastOrderDate: item.orderDate,
+            updatedAt: new Date(),
+            userEmail: activeEmail,
+          };
+          localCustomerState.set(item.custKey, updatedRecord);
+        }
+      } else {
+        const newCustRecord = {
+          custKey: item.custKey,
+          userEmail: activeEmail,
+          name: item.custName || "Unknown Customer",
+          mobileNumber: item.mobile,
+          address: item.address,
+          state: item.state,
+          orderCount: 1,
+          orders: [newOrderObj],
+          firstOrderDate: item.orderDate,
+          lastOrderDate: item.orderDate,
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        };
+        localCustomerState.set(item.custKey, newCustRecord);
+      }
+    }
 
-          await customersCol.updateOne(
-            { _id: existingCustomer._id },
-            {
+    // Prepare customer operations
+    for (const [custKey, custData] of localCustomerState.entries()) {
+      if (custData._id) {
+        customerOps.push({
+          updateOne: {
+            filter: { _id: custData._id },
+            update: {
               $set: {
-                name: custName || existingCustomer.name,
-                mobileNumber: mobile || existingCustomer.mobileNumber,
-                address: address || existingCustomer.address,
-                state: state || existingCustomer.state,
-                orderCount: newOrderCount,
-                orders: updatedOrders,
-                lastOrderDate: orderDate,
+                name: custData.name,
+                mobileNumber: custData.mobileNumber,
+                address: custData.address,
+                state: custData.state,
+                orderCount: custData.orderCount,
+                orders: custData.orders,
+                lastOrderDate: custData.lastOrderDate,
                 updatedAt: new Date(),
                 userEmail: activeEmail,
               },
-            }
-          );
-        }
+            },
+          },
+        });
       } else {
-        await customersCol.insertOne({
-          custKey,
-          userEmail: activeEmail,
-          name: custName || "Unknown Customer",
-          mobileNumber: mobile,
-          address,
-          state,
-          orderCount: 1,
-          orders: [newOrderObj],
-          firstOrderDate: orderDate,
-          lastOrderDate: orderDate,
-          createdAt: new Date(),
-          updatedAt: new Date(),
+        customerOps.push({
+          insertOne: {
+            document: custData,
+          },
         });
       }
+    }
+
+    if (orderOps.length > 0) {
+      await ordersCol.bulkWrite(orderOps, { ordered: false });
+    }
+    if (customerOps.length > 0) {
+      await customersCol.bulkWrite(customerOps, { ordered: false });
     }
   } catch (err) {
     console.error("Error saving customer orders to MongoDB:", err.message);
