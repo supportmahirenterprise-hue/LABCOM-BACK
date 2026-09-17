@@ -33,11 +33,29 @@ function extractFieldsFromPages(pageTexts, useNativeScript = false) {
       get(text, /(INV[-_]?\w+)/i) ||
       "";
 
-    // 3. Customer Name
+    // 3. Customer Name, Address & Mobile Number
     let customerName =
       get(text, /Customer Address\s*[\r\n]+\s*([^\r\n]+)/i) ||
       get(text, /BILL TO\s*[:\s]*[\r\n]*\s*([^\r\n]+)/i) ||
       "";
+
+    // Extract full customer address block
+    let customerAddress = "";
+    const addrMatch = text.match(/Customer Address\s*[:\s]*([\s\S]*?)(?:If undelivered|return to|Sold by|Product Details|TAX INVOICE|BILL TO|Shipping Address)/i);
+    if (addrMatch && addrMatch[1].trim().length > 10) {
+      customerAddress = addrMatch[1].trim().replace(/[\r\n]+/g, ", ");
+    } else {
+      customerAddress = customerName || "N/A";
+    }
+
+    // Extract Mobile / Contact Number (if present)
+    let mobileNumber = "";
+    const mobMatch =
+      text.match(/(?:Mob(?:ile)?|Phone|Tel|Contact)\s*[:.\s]*(\+?91[\s-]?)?([6-9]\d{9})/i) ||
+      text.match(/\b([6-9]\d{9})\b/);
+    if (mobMatch) {
+      mobileNumber = mobMatch[2] || mobMatch[1] || "";
+    }
 
     // 4. Order Date
     let orderDate =
@@ -141,6 +159,8 @@ function extractFieldsFromPages(pageTexts, useNativeScript = false) {
       orderDate,
       invoiceNo,
       customerName,
+      customerAddress,
+      mobileNumber,
       sku,
       size,
       qty,

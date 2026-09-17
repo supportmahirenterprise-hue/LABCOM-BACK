@@ -65,6 +65,11 @@ const STATE_MESSAGES = {
     message: "Aapke pyaar aur vishwas ke liye ghani khamma aur shukriya!",
     nativeMessage: "आपके प्यार और विश्वास के लिए घणी खम्मा और शुक्रिया!",
   },
+  Goa: {
+    language: "Konkani",
+    message: "Dev Boren Korum! Tuhajya order khatir khup khup dhanyavaad!",
+    nativeMessage: "देव बरे करू! तुमच्या विश्वासाबद्दल आणि ऑर्डर बद्दल खूप खूप धन्यवाद!",
+  },
   HindiBelt: {
     language: "Hindi",
     message: "Thank you! Aapke pyaar aur vishwas ke liye bahut-bahut shukriya!",
@@ -101,6 +106,8 @@ function resolveRegionalGreeting(rawText = "", useNativeScript = false) {
     matchInfo = { state: "Tamil Nadu", ...STATE_MESSAGES.TamilNadu };
   } else if (/PUNJAB|LUDHIANA|AMRITSAR|JALANDHAR|PATIALA|BATHINDA|MOHALI|HOSHIARPUR|BATALA|PATHANKOT/i.test(text)) {
     matchInfo = { state: "Punjab", ...STATE_MESSAGES.Punjab };
+  } else if (/\bGOA\b|PANAJI|PANJIM|MARGAO|VASCO|MAPUSA|PONDA|SOUTH GOA|NORTH GOA/i.test(text)) {
+    matchInfo = { state: "Goa", ...STATE_MESSAGES.Goa };
   } else if (/MAHARASHTRA|MUMBAI|PUNE|NAGPUR|THANE|NASHIK|AURANGABAD|SOLAPUR|AMRAVATI|KOLHAPUR|NAVI MUMBAI|AKOLA|LATUR|DHULE/i.test(text)) {
     matchInfo = { state: "Maharashtra", ...STATE_MESSAGES.Maharashtra };
   } else if (/KARNATAKA|BENGALURU|BANGALORE|MYSURU|MYSORE|HUBLI|DHARWAD|MANGALORE|BELGAUM|GULBARGA|DAVANAGERE|BELLARY|SHIMOGA/i.test(text)) {
@@ -125,8 +132,10 @@ function resolveRegionalGreeting(rawText = "", useNativeScript = false) {
     // 2. PIN Code Detection strictly inside Customer Delivery Address
     const pinMatch = custAddress.match(/\b([1-8]\d{5})\b/);
     if (pinMatch) {
+      const pinFull = parseInt(pinMatch[1], 10);
       const pin2 = parseInt(pinMatch[1].substring(0, 2), 10);
-      if (pin2 >= 60 && pin2 <= 64) matchInfo = { state: "Tamil Nadu", ...STATE_MESSAGES.TamilNadu };
+      if (pinFull >= 403001 && pinFull <= 403999) matchInfo = { state: "Goa", ...STATE_MESSAGES.Goa };
+      else if (pin2 >= 60 && pin2 <= 64) matchInfo = { state: "Tamil Nadu", ...STATE_MESSAGES.TamilNadu };
       else if (pin2 >= 14 && pin2 <= 16) matchInfo = { state: "Punjab", ...STATE_MESSAGES.Punjab };
       else if (pin2 >= 40 && pin2 <= 44) matchInfo = { state: "Maharashtra", ...STATE_MESSAGES.Maharashtra };
       else if (pin2 >= 56 && pin2 <= 59) matchInfo = { state: "Karnataka", ...STATE_MESSAGES.Karnataka };

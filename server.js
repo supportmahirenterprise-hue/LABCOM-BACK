@@ -318,6 +318,194 @@ const DEFAULT_TEMPLATES = [
   },
 ];
 
+// ---- CUSTOMER DB SAVE & ANALYSIS ENGINE ----------------------------------
+
+async function saveCustomerOrders(fields, userEmail = "guest") {
+  if (!Array.isArray(fields) || fields.length === 0) return;
+  try {
+    const db = await getDb();
+    const customersCol = db.collection("customers");
+    const ordersCol = db.collection("orders");
+
+    for (const item of fields) {
+      const custName = (item.customerName || "").trim();
+      const mobile = (item.mobileNumber || "").trim();
+      const address = (item.customerAddress || custName).trim();
+      const orderNo = (item.orderNo || "").trim();
+      const orderDate = item.orderDate || new Date().toISOString().slice(0, 10);
+      const sku = (item.sku || "").trim();
+      const qty = parseInt(item.qty, 10) || 1;
+      const state = (item.state || "India").trim();
+
+      if (!custName && !orderNo && !mobile) continue;
+
+      let custKey = "";
+      if (mobile && mobile.length >= 10) {
+        custKey = `phone:${mobile}`;
+      } else if (custName) {
+        custKey = `name:${custName.toLowerCase().replace(/[^a-z0-9]/g, "")}`;
+      } else {
+        custKey = `order:${orderNo}`;
+      }
+
+      const orderItem = {
+        orderNo,
+        orderDate,
+        sku,
+        qty,
+        state,
+        address,
+        processedAt: new Date(),
+        userEmail: userEmail || "guest",
+      };
+
+      if (orderNo) {
+        const existingOrder = await ordersCol.findOne({ orderNo, userEmail: userEmail || "guest" });
+        if (!existingOrder) {
+          await ordersCol.insertOne({
+            orderNo,
+            customerName: custName,
+            customerMobile: mobile,
+            customerAddress: address,
+            state,
+            orderDate,
+            sku,
+            qty,
+            userEmail: userEmail || "guest",
+            createdAt: new Date(),
+          });
+        }
+      }
+
+      const existingCustomer = await customersCol.findOne({ custKey, userEmail: userEmail || "guest" });
+      if (existingCustomer) {
+        const hasOrder = existingCustomer.orders?.some((o) => o.orderNo === orderNo && orderNo !== "");
+        if (!hasOrder) {
+          await customersCol.updateOne(
+            { _id: existingCustomer._id },
+            {
+              $inc: { orderCount: 1 },
+              $push: { orders: orderItem },
+              $set: {
+                name: custName || existingCustomer.name,
+                mobileNumber: mobile || existingCustomer.mobileNumber,
+                address: address || existingCustomer.address,
+                state: state || existingCustomer.state,
+                lastOrderDate: orderDate,
+                updatedAt: new Date(),
+              },
+            }
+          );
+        }
+      } else {
+        await customersCol.insertOne({
+          custKey,
+          userEmail: userEmail || "guest",
+          name: custName || "Unknown Customer",
+          mobileNumber: mobile,
+          address,
+          state,
+          orderCount: 1,
+          orders: [orderItem],
+          firstOrderDate: orderDate,
+          lastOrderDate: orderDate,
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        });
+      }
+    }
+  } catch (err) {
+    console.error("Error saving customer orders to MongoDB:", err.message);
+  }
+}
+
+// GET /api/customer-analysis
+app.get("/api/customer-analysis", async (req, res) => {
+  try {
+    const db = await getDb();
+    const userEmail = getUserEmail(req);
+    const filter = userEmail ? { userEmail } : {};
+    const search = (req.query.search || "").trim().toLowerCase();
+    const repeatOnly = req.query.repeatOnly === "true";
+
+    const customersCol = db.collection("customers");
+    let customers = await customersCol.find(filter).sort({ orderCount: -1, updatedAt: -1 }).toArray();
+
+    const totalCustomers = customers.length;
+    const repeatCustomersCount = customers.filter((c) => (c.orderCount || 1) > 1).length;
+    const repeatRate = totalCustomers > 0 ? ((repeatCustomersCount / totalCustomers) * 100).toFixed(1) : 0;
+    const totalOrdersProcessed = customers.reduce((sum, c) => sum + (c.orderCount || 1), 0);
+
+    if (search) {
+      customers = customers.filter((c) => {
+        const nameMatch = (c.name || "").toLowerCase().includes(search);
+        const mobMatch = (c.mobileNumber || "").toLowerCase().includes(search);
+        const addrMatch = (c.address || "").toLowerCase().includes(search);
+        const stateMatch = (c.state || "").toLowerCase().includes(search);
+        const orderMatch = c.orders?.some((o) => (o.orderNo || "").toLowerCase().includes(search));
+        return nameMatch || mobMatch || addrMatch || stateMatch || orderMatch;
+      });
+    }
+
+    if (repeatOnly) {
+      customers = customers.filter((c) => (c.orderCount || 1) > 1);
+    }
+
+    const formattedList = customers.map((c) => ({
+      id: c._id.toString(),
+      name: c.name || "Customer",
+      mobileNumber: c.mobileNumber || "N/A",
+      address: c.address || "N/A",
+      state: c.state || "India",
+      orderCount: c.orderCount || 1,
+      isRepeat: (c.orderCount || 1) > 1,
+      firstOrderDate: c.firstOrderDate || "",
+      lastOrderDate: c.lastOrderDate || "",
+      ordersCountText: (c.orderCount || 1) > 1 ? `${c.orderCount} Orders` : "1 Order",
+      orders: c.orders || [],
+    }));
+
+    res.json({
+      summary: {
+        totalCustomers,
+        repeatCustomersCount,
+        repeatRate,
+        totalOrdersProcessed,
+      },
+      customers: formattedList,
+    });
+  } catch (err) {
+    console.error("Customer Analysis API Error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/customer-analysis/history
+app.get("/api/customer-analysis/history", async (req, res) => {
+  try {
+    const db = await getDb();
+    const id = req.query.id;
+    if (!id) return res.status(400).json({ error: "Customer ID is required" });
+
+    const customersCol = db.collection("customers");
+    const customer = await customersCol.findOne({ _id: new ObjectId(id) });
+    if (!customer) return res.status(404).json({ error: "Customer not found" });
+
+    res.json({
+      id: customer._id.toString(),
+      name: customer.name,
+      mobileNumber: customer.mobileNumber || "N/A",
+      address: customer.address || "N/A",
+      state: customer.state || "India",
+      orderCount: customer.orderCount || 1,
+      orders: customer.orders || [],
+    });
+  } catch (err) {
+    console.error("Customer History API Error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ---- PDF ROUTES -----------------------------------------------------------
 
 // 1. Upload a PDF, get back extracted per-page fields
@@ -330,6 +518,10 @@ app.post("/api/preview", upload.single("pdf"), async (req, res) => {
       req.body?.useNativeScript === true;
     const pageTexts = await getPerPageText(req.file.buffer);
     const fields = extractFieldsFromPages(pageTexts, useNative);
+
+    // Auto-save extracted customer details to DB asynchronously
+    saveCustomerOrders(fields, getUserEmail(req)).catch((e) => console.error("Auto-save customer error:", e));
+
     res.json({ pageCount: fields.length, pages: fields });
   } catch (err) {
     console.error(err);
@@ -365,6 +557,9 @@ app.post("/api/generate", upload.single("pdf"), async (req, res) => {
 
     const pageTexts = await getPerPageText(req.file.buffer);
     let fields = extractFieldsFromPages(pageTexts, isNativeScript);
+
+    // Auto-save extracted customer details to DB asynchronously
+    saveCustomerOrders(fields, getUserEmail(req)).catch((e) => console.error("Auto-save customer error:", e));
 
     let overrideData = [];
     try {
