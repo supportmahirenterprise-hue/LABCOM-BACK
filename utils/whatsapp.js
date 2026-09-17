@@ -30,17 +30,21 @@ function sendWhatsAppMedia({
       mimeType ||
       mimetype ||
       (fileData.startsWith("data:image") ? "image/png" : "application/pdf");
-    const resolvedCaption = caption || resolvedFileName;
+    const resolvedCaption = caption !== undefined ? caption : "";
 
-    const payload = JSON.stringify({
+    const payloadObj = {
       number: formattedNumber,
       fileData,
       fileName: resolvedFileName,
       filename: resolvedFileName,
-      caption: resolvedCaption,
       mimeType: resolvedMimeType,
       mimetype: resolvedMimeType,
-    });
+    };
+    if (resolvedCaption && resolvedCaption.trim() !== "") {
+      payloadObj.caption = resolvedCaption;
+    }
+
+    const payload = JSON.stringify(payloadObj);
 
     const req = https.request(
       WA_API_URL,

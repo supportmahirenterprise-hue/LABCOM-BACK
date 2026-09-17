@@ -1020,14 +1020,16 @@ app.post("/api/generate", upload.single("pdf"), async (req, res) => {
         const stampedFileName = isSample ? `1_${dateStr}_sample_test_page_1.pdf` : `${pageCount}_${dateStr}_stamped.pdf`;
         const summaryFileName = isSample ? `1_${dateStr}_sample_summary.png` : `${pageCount}_${dateStr}_summary.png`;
 
-        // 1. Send Stamped PDF as PDF format (data:application/pdf;base64,...) with exact filename
+        const sortedFields = (order || []).map((idx) => fields[idx] || {});
+
+        // 1. Send Stamped PDF as PDF format (data:application/pdf;base64,...) with exact filename (no text caption underneath)
         const pdfBase64 = `data:application/pdf;base64,${Buffer.from(outBytes).toString("base64")}`;
         await sendWhatsAppMedia({
           number: receiverNumber,
           fileData: pdfBase64,
           fileName: stampedFileName,
           filename: stampedFileName,
-          caption: stampedFileName,
+          caption: "",
           mimeType: "application/pdf",
           typeName: "Stamped PDF",
         });
@@ -1036,14 +1038,15 @@ app.post("/api/generate", upload.single("pdf"), async (req, res) => {
         await new Promise((resolve) => setTimeout(resolve, 1000));
 
         // 2. Generate Summary PNG Image and Send via WhatsApp (data:image/png;base64,...) with exact filename
-        if (sortedFields && sortedFields.length > 0) {
-          const summaryPngBase64 = generateSummaryCanvasImage(sortedFields, req.file?.originalname || "labels.pdf");
+        const dataForSummary = sortedFields.length > 0 ? sortedFields : fields;
+        if (dataForSummary && dataForSummary.length > 0) {
+          const summaryPngBase64 = generateSummaryCanvasImage(dataForSummary, req.file?.originalname || "labels.pdf");
           await sendWhatsAppMedia({
             number: receiverNumber,
             fileData: summaryPngBase64,
             fileName: summaryFileName,
             filename: summaryFileName,
-            caption: summaryFileName,
+            caption: "",
             mimeType: "image/png",
             typeName: "Summary PNG Image",
           });
