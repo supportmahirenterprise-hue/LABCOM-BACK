@@ -20,12 +20,17 @@ function extractFieldsFromPages(pageTexts, useNativeScript = false) {
       .filter(Boolean);
 
 
-    // 1. Order No
+    // 1. Order No & Sub Order ID
     let orderNo =
       get(text, /Purchase Order No\.?\s*[:\s]*[\r\n]*\s*(\S+)/i) ||
       get(text, /Order No\.?\s*[:\s]*[\r\n]*\s*(\S+)/i) ||
       get(text, /(\d{10,}_\d+|\d{10,})/) ||
       "";
+
+    let subOrderNo =
+      get(text, /Sub\s*Order\s*(?:No|ID)\.?\s*[:\s]*[\r\n]*\s*(\S+)/i) ||
+      get(text, /SubOrderNo\.?\s*[:\s]*[\r\n]*\s*(\S+)/i) ||
+      orderNo;
 
     // 2. Invoice No
     let invoiceNo =
@@ -156,6 +161,7 @@ function extractFieldsFromPages(pageTexts, useNativeScript = false) {
     return {
       page: idx + 1,
       orderNo,
+      subOrderNo,
       orderDate,
       invoiceNo,
       customerName,

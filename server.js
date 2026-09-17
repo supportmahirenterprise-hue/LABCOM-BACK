@@ -334,6 +334,7 @@ async function saveCustomerOrders(fields, userEmail = "guest") {
       const mobile = (item.mobileNumber || "").trim();
       const address = (item.customerAddress || custName).trim();
       const orderNo = (item.orderNo || "").trim();
+      const subOrderNo = (item.subOrderNo || orderNo).trim();
       const orderDate = item.orderDate || new Date().toISOString().slice(0, 10);
       const sku = (item.sku || "").trim();
       const qty = parseInt(item.qty, 10) || 1;
@@ -353,10 +354,11 @@ async function saveCustomerOrders(fields, userEmail = "guest") {
       }
 
       if (orderNo) {
-        const existingGlobalOrder = await ordersCol.findOne({ orderNo });
+        const existingGlobalOrder = await ordersCol.findOne({ $or: [{ orderNo }, { subOrderNo }] });
         if (!existingGlobalOrder) {
           await ordersCol.insertOne({
             orderNo,
+            subOrderNo,
             customerName: custName,
             customerMobile: mobile,
             customerAddress: address,
@@ -374,6 +376,7 @@ async function saveCustomerOrders(fields, userEmail = "guest") {
 
       const newOrderObj = {
         orderNo,
+        subOrderNo,
         orderDate,
         sku,
         qty,
@@ -383,9 +386,9 @@ async function saveCustomerOrders(fields, userEmail = "guest") {
       };
 
       if (existingCustomer) {
-        // STRICT RULE: If orderNo is already in this customer's order history, DO NOT add duplicate & DO NOT increment orderCount!
+        // STRICT RULE: If orderNo/subOrderNo is already in this customer's order history, DO NOT add duplicate & DO NOT increment orderCount!
         const isDuplicateOrder = orderNo
-          ? existingCustomer.orders?.some((o) => o.orderNo === orderNo)
+          ? existingCustomer.orders?.some((o) => o.orderNo === orderNo || (o.subOrderNo && o.subOrderNo === subOrderNo))
           : false;
 
         if (!isDuplicateOrder) {
