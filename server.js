@@ -56,6 +56,9 @@ app.use(
       "X-Requested-With",
       "Accept",
       "x-user-email",
+      "x-internal-secret",
+      "x-api-key",
+      "x-user-id",
     ],
   })
 );
