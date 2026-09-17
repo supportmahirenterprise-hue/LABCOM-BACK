@@ -438,8 +438,18 @@ app.get("/api/customer-analysis", async (req, res) => {
     const customersCol = db.collection("customers");
     const search = (req.query.search || "").trim().toLowerCase();
     const repeatOnly = req.query.repeatOnly === "true";
+    const selectedState = (req.query.state || "").trim();
 
-    let customers = await customersCol.find({}).sort({ orderCount: -1, updatedAt: -1 }).toArray();
+    let allCustomers = await customersCol.find({}).sort({ orderCount: -1, updatedAt: -1 }).toArray();
+
+    // Unique state list for filter dropdown
+    const allStates = Array.from(new Set(allCustomers.map((c) => c.state).filter(Boolean))).sort();
+
+    let customers = [...allCustomers];
+
+    if (selectedState && selectedState.toUpperCase() !== "ALL") {
+      customers = customers.filter((c) => (c.state || "").toLowerCase() === selectedState.toLowerCase());
+    }
 
     const totalCustomers = customers.length;
     const repeatCustomersCount = customers.filter((c) => (c.orderCount || 1) > 1).length;
@@ -484,6 +494,7 @@ app.get("/api/customer-analysis", async (req, res) => {
         repeatCustomersCount,
         repeatRate,
         totalOrdersProcessed,
+        allStates: allStates || [],
       },
       customers: formattedList,
     });
