@@ -923,6 +923,7 @@ app.get("/api/customer-analysis/history", async (req, res) => {
 
 // 1. Upload a PDF, get back extracted per-page fields
 app.post("/api/preview", upload.single("pdf"), async (req, res) => {
+  req.setTimeout(600000); // 10 minutes timeout for large PDFs
   try {
     if (!req.file) return res.status(400).json({ error: "PDF file is required" });
     const useNative =
@@ -944,6 +945,7 @@ app.post("/api/preview", upload.single("pdf"), async (req, res) => {
 
 // 2. Upload PDF + config, stamp QR/details, reorder pages, return processed PDF
 app.post("/api/generate", upload.single("pdf"), async (req, res) => {
+  req.setTimeout(600000); // 10 minutes timeout for large PDFs
   try {
     if (!req.file || !req.file.buffer || req.file.buffer.length === 0) {
       return res.status(400).json({ error: "PDF file is required and cannot be empty" });
@@ -1940,4 +1942,7 @@ app.get("/r/:code", async (req, res) => {
 });
 
 const PORT = process.env.PORT || 5001;
-app.listen(PORT, () => console.log(`🚀 LABCOM Backend running on http://localhost:${PORT}`));
+const server = app.listen(PORT, () => console.log(`🚀 LABCOM Backend running on http://localhost:${PORT}`));
+server.timeout = 10 * 60 * 1000; // 10 minutes timeout
+server.keepAliveTimeout = 10 * 60 * 1000;
+server.headersTimeout = 10 * 60 * 1000 + 1000;
