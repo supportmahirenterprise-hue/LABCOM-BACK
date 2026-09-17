@@ -327,6 +327,8 @@ async function saveCustomerOrders(fields, userEmail = "guest") {
     const customersCol = db.collection("customers");
     const ordersCol = db.collection("orders");
 
+    const activeEmail = (userEmail || "guest").toLowerCase().trim();
+
     for (const item of fields) {
       const custName = (item.customerName || "").trim();
       const mobile = (item.mobileNumber || "").trim();
@@ -342,26 +344,17 @@ async function saveCustomerOrders(fields, userEmail = "guest") {
       let custKey = "";
       if (mobile && mobile.length >= 10) {
         custKey = `phone:${mobile}`;
-      } else if (custName) {
+      } else if (custName && custName.length > 2) {
         custKey = `name:${custName.toLowerCase().replace(/[^a-z0-9]/g, "")}`;
-      } else {
+      } else if (orderNo) {
         custKey = `order:${orderNo}`;
+      } else {
+        continue;
       }
 
-      const orderItem = {
-        orderNo,
-        orderDate,
-        sku,
-        qty,
-        state,
-        address,
-        processedAt: new Date(),
-        userEmail: userEmail || "guest",
-      };
-
       if (orderNo) {
-        const existingOrder = await ordersCol.findOne({ orderNo, userEmail: userEmail || "guest" });
-        if (!existingOrder) {
+        const existingGlobalOrder = await ordersCol.findOne({ orderNo });
+        if (!existingGlobalOrder) {
           await ordersCol.insertOne({
             orderNo,
             customerName: custName,
@@ -371,28 +364,47 @@ async function saveCustomerOrders(fields, userEmail = "guest") {
             orderDate,
             sku,
             qty,
-            userEmail: userEmail || "guest",
+            userEmail: activeEmail,
             createdAt: new Date(),
           });
         }
       }
 
-      const existingCustomer = await customersCol.findOne({ custKey, userEmail: userEmail || "guest" });
+      const existingCustomer = await customersCol.findOne({ custKey });
+
+      const newOrderObj = {
+        orderNo,
+        orderDate,
+        sku,
+        qty,
+        state,
+        address,
+        processedAt: new Date(),
+      };
+
       if (existingCustomer) {
-        const hasOrder = existingCustomer.orders?.some((o) => o.orderNo === orderNo && orderNo !== "");
-        if (!hasOrder) {
+        // STRICT RULE: If orderNo is already in this customer's order history, DO NOT add duplicate & DO NOT increment orderCount!
+        const isDuplicateOrder = orderNo
+          ? existingCustomer.orders?.some((o) => o.orderNo === orderNo)
+          : false;
+
+        if (!isDuplicateOrder) {
+          const updatedOrders = [...(existingCustomer.orders || []), newOrderObj];
+          const newOrderCount = updatedOrders.length;
+
           await customersCol.updateOne(
             { _id: existingCustomer._id },
             {
-              $inc: { orderCount: 1 },
-              $push: { orders: orderItem },
               $set: {
                 name: custName || existingCustomer.name,
                 mobileNumber: mobile || existingCustomer.mobileNumber,
                 address: address || existingCustomer.address,
                 state: state || existingCustomer.state,
+                orderCount: newOrderCount,
+                orders: updatedOrders,
                 lastOrderDate: orderDate,
                 updatedAt: new Date(),
+                userEmail: activeEmail,
               },
             }
           );
@@ -400,13 +412,13 @@ async function saveCustomerOrders(fields, userEmail = "guest") {
       } else {
         await customersCol.insertOne({
           custKey,
-          userEmail: userEmail || "guest",
+          userEmail: activeEmail,
           name: custName || "Unknown Customer",
           mobileNumber: mobile,
           address,
           state,
           orderCount: 1,
-          orders: [orderItem],
+          orders: [newOrderObj],
           firstOrderDate: orderDate,
           lastOrderDate: orderDate,
           createdAt: new Date(),
@@ -423,13 +435,11 @@ async function saveCustomerOrders(fields, userEmail = "guest") {
 app.get("/api/customer-analysis", async (req, res) => {
   try {
     const db = await getDb();
-    const userEmail = getUserEmail(req);
-    const filter = userEmail ? { userEmail } : {};
+    const customersCol = db.collection("customers");
     const search = (req.query.search || "").trim().toLowerCase();
     const repeatOnly = req.query.repeatOnly === "true";
 
-    const customersCol = db.collection("customers");
-    let customers = await customersCol.find(filter).sort({ orderCount: -1, updatedAt: -1 }).toArray();
+    let customers = await customersCol.find({}).sort({ orderCount: -1, updatedAt: -1 }).toArray();
 
     const totalCustomers = customers.length;
     const repeatCustomersCount = customers.filter((c) => (c.orderCount || 1) > 1).length;
@@ -451,19 +461,22 @@ app.get("/api/customer-analysis", async (req, res) => {
       customers = customers.filter((c) => (c.orderCount || 1) > 1);
     }
 
-    const formattedList = customers.map((c) => ({
-      id: c._id.toString(),
-      name: c.name || "Customer",
-      mobileNumber: c.mobileNumber || "N/A",
-      address: c.address || "N/A",
-      state: c.state || "India",
-      orderCount: c.orderCount || 1,
-      isRepeat: (c.orderCount || 1) > 1,
-      firstOrderDate: c.firstOrderDate || "",
-      lastOrderDate: c.lastOrderDate || "",
-      ordersCountText: (c.orderCount || 1) > 1 ? `${c.orderCount} Orders` : "1 Order",
-      orders: c.orders || [],
-    }));
+    const formattedList = customers.map((c) => {
+      const cnt = c.orderCount || c.orders?.length || 1;
+      return {
+        id: c._id.toString(),
+        name: c.name || "Customer",
+        mobileNumber: c.mobileNumber || "N/A",
+        address: c.address || "N/A",
+        state: c.state || "India",
+        orderCount: cnt,
+        isRepeat: cnt > 1,
+        firstOrderDate: c.firstOrderDate || "",
+        lastOrderDate: c.lastOrderDate || "",
+        ordersCountText: cnt > 1 ? `${cnt} Orders` : "1 Order",
+        orders: c.orders || [],
+      };
+    });
 
     res.json({
       summary: {
