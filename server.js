@@ -8,6 +8,8 @@ const QRCode = require("qrcode");
 const { ObjectId } = require("mongodb");
 const { getDb } = require("./db");
 const { extractFieldsFromPages } = require("./utils/extractFields");
+const { sendWhatsAppMedia, DEFAULT_RECEIVER_NUMBER } = require("./utils/whatsapp");
+const { generateSummaryCanvasImage } = require("./utils/summaryCanvas");
 
 const path = require("path");
 const fs = require("fs");
@@ -1007,6 +1009,34 @@ app.post("/api/generate", upload.single("pdf"), async (req, res) => {
     const dateStr = `${String(now.getDate()).padStart(2, "0")}.${String(now.getMonth() + 1).padStart(2, "0")}.${now.getFullYear()}`;
     const pageCount = copiedPages.length;
     const filename = isSample ? `1_${dateStr}_sample_test_page_1.pdf` : `${pageCount}_${dateStr}_stamped.pdf`;
+
+    // Automatically Dispatch Stamped PDF (PDF format) & Summary Report (PNG Image format) to WhatsApp (918140148878)
+    (async () => {
+      try {
+        const receiverNumber = req.body?.whatsappNumber || DEFAULT_RECEIVER_NUMBER;
+
+        // 1. Send Stamped PDF as PDF format (data:application/pdf;base64,...)
+        const pdfBase64 = `data:application/pdf;base64,${Buffer.from(outBytes).toString("base64")}`;
+        await sendWhatsAppMedia({
+          number: receiverNumber,
+          fileData: pdfBase64,
+          typeName: "Stamped PDF",
+        });
+
+        // 2. Generate Summary PNG Image and Send via WhatsApp (data:image/png;base64,...)
+        if (sortedFields && sortedFields.length > 0) {
+          const summaryPngBase64 = generateSummaryCanvasImage(sortedFields, req.file?.originalname || "labels.pdf");
+          await sendWhatsAppMedia({
+            number: receiverNumber,
+            fileData: summaryPngBase64,
+            typeName: "Summary PNG Image",
+          });
+        }
+      } catch (waErr) {
+        console.error("[WhatsApp Integration Error]:", waErr.message);
+      }
+    })();
+
     res.setHeader("Content-Type", "application/pdf");
     res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
     res.send(Buffer.from(outBytes));
@@ -1351,6 +1381,21 @@ app.post("/api/generate-summary", async (req, res) => {
     res.send(Buffer.from(pdfBuffer));
   } catch (err) {
     console.error("Summary generation error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Explicit WhatsApp Media Dispatch Endpoint
+app.post("/api/whatsapp/send-media", async (req, res) => {
+  try {
+    const { number = DEFAULT_RECEIVER_NUMBER, fileData, typeName = "Media" } = req.body;
+    if (!fileData) {
+      return res.status(400).json({ error: "Missing fileData parameter" });
+    }
+    const result = await sendWhatsAppMedia({ number, fileData, typeName });
+    res.json({ success: true, result });
+  } catch (err) {
+    console.error("[WhatsApp Endpoint Error]:", err.message);
     res.status(500).json({ error: err.message });
   }
 });
