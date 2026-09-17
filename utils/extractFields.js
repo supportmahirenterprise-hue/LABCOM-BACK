@@ -19,7 +19,6 @@ function extractFieldsFromPages(pageTexts, useNativeScript = false, startPageOff
       .map((l) => l.trim())
       .filter(Boolean);
 
-
     // 1. Order No & Sub Order ID
     let subOrderNo =
       get(text, /Order No\.?\s*[:\s]*[\r\n]*\s*(\d{10,}_\d+)/i) ||
@@ -98,10 +97,13 @@ function extractFieldsFromPages(pageTexts, useNativeScript = false, startPageOff
     let color = "";
 
     // Check single-line combined table row first
-    const productLine = lines.find((l) =>
-      /^\d+\s+\S+/.test(l) ||
-      /SKU|Style|Item|Product/i.test(l)
+    const lineMatch = text.match(
+      /SKU\s+Size\s+Qty\s+Color\s+Order No\.?\s*[\r\n]+([^\r\n]+)/i
     );
+    if (lineMatch) {
+      const tokens = lineMatch[1].trim().split(/\s+/);
+      const orderNoTokIdx = tokens.findIndex((t) => /^\d{6,}(_\d+)?$/.test(t));
+      sku = tokens[0] || "";
 
       let qtyIdx = -1;
       for (let i = 1; i < tokens.length; i++) {
@@ -177,8 +179,10 @@ function extractFieldsFromPages(pageTexts, useNativeScript = false, startPageOff
     // 6. Regional State & Heartwarming Greeting Resolver
     const regionalInfo = resolveRegionalGreeting(text, useNativeScript);
 
+    const actualPageNumber = (parseInt(startPageOffset, 10) || 1) + idx;
+
     return {
-      page: idx + 1,
+      page: actualPageNumber,
       orderNo,
       subOrderNo,
       paymentType,
