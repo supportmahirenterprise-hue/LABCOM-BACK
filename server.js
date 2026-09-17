@@ -174,14 +174,19 @@ const upload = multer({
 
 // ---- helpers -------------------------------------------------------------
 
-async function getPerPageText(buffer) {
+async function getPerPageText(buffer, startPage = 1, endPage = null) {
   const pageTexts = [];
+  let pageIdx = 0;
   await pdfParse(buffer, {
     pagerender: async (pageData) => {
-      const textContent = await pageData.getTextContent();
-      const text = textContent.items.map((i) => i.str).join("\n");
-      pageTexts.push(text);
-      return text;
+      pageIdx++;
+      if (pageIdx >= startPage && (!endPage || pageIdx <= endPage)) {
+        const textContent = await pageData.getTextContent();
+        const text = textContent.items.map((i) => i.str).join("\n");
+        pageTexts.push(text);
+        return text;
+      }
+      return "";
     },
   });
   return pageTexts;
@@ -930,8 +935,12 @@ app.post("/api/preview", upload.single("pdf"), async (req, res) => {
       req.body?.useNativeScript === "true" ||
       req.query?.useNativeScript === "true" ||
       req.body?.useNativeScript === true;
-    const pageTexts = await getPerPageText(req.file.buffer);
-    const fields = extractFieldsFromPages(pageTexts, useNative);
+
+    const startPage = parseInt(req.body?.startPage || "1", 10);
+    const endPage = req.body?.endPage ? parseInt(req.body.endPage, 10) : null;
+
+    const pageTexts = await getPerPageText(req.file.buffer, startPage, endPage);
+    const fields = extractFieldsFromPages(pageTexts, useNative, startPage);
 
     // Auto-save extracted customer details to DB asynchronously
     saveCustomerOrders(fields, getUserEmail(req)).catch((e) => console.error("Auto-save customer error:", e));
@@ -964,14 +973,19 @@ app.post("/api/generate", upload.single("pdf"), async (req, res) => {
       fontSize = "8",
       overrides = "[]",
       sampleOnly = "false",
+      startPage,
+      endPage,
     } = req.body;
 
     const isNativeScript = String(useNativeScript) === "true";
     const isSample = String(sampleOnly) === "true";
     const shouldStampQr = String(enableQr) !== "false";
 
-    const pageTexts = await getPerPageText(req.file.buffer);
-    let fields = extractFieldsFromPages(pageTexts, isNativeScript);
+    const startP = parseInt(startPage || "1", 10);
+    const endP = endPage ? parseInt(endPage, 10) : null;
+
+    const pageTexts = await getPerPageText(req.file.buffer, startP, endP);
+    let fields = extractFieldsFromPages(pageTexts, isNativeScript, startP);
 
     // Auto-save extracted customer details to DB asynchronously
     saveCustomerOrders(fields, getUserEmail(req)).catch((e) => console.error("Auto-save customer error:", e));
@@ -984,14 +998,18 @@ app.post("/api/generate", upload.single("pdf"), async (req, res) => {
     }
     if (Array.isArray(overrideData) && overrideData.length > 0) {
       fields = fields.map((f, i) => {
-        const ov = overrideData[i] || overrideData.find((o) => o && o.page === i + 1) || {};
+        const pageNum = startP + i;
+        const ov = overrideData.find((o) => o && o.page === pageNum) || {};
         return { ...f, ...ov };
       });
     }
 
     const srcDoc = await PDFDocument.load(req.file.buffer);
-    const pages = srcDoc.getPages();
-    const totalPagesToProcess = isSample ? Math.min(1, pages.length) : pages.length;
+    const totalPdfPages = srcDoc.getPageCount();
+
+    const rangeStartIdx = isSample ? 0 : Math.max(0, startP - 1);
+    const rangeEndIdx = isSample ? 1 : (endP ? Math.min(totalPdfPages, endP) : totalPdfPages);
+    const numPagesToProcess = Math.max(0, rangeEndIdx - rangeStartIdx);
 
     if (shouldStampQr) {
       const font = await srcDoc.embedFont(StandardFonts.TimesRomanItalic);
@@ -1003,11 +1021,12 @@ app.post("/api/generate", upload.single("pdf"), async (req, res) => {
       const qrImageCache = new Map();
       const unicodeImageCache = new Map();
 
-      for (let i = 0; i < totalPagesToProcess; i++) {
-        const page = pages[i];
+      for (let i = 0; i < numPagesToProcess; i++) {
+        const pageIdx = rangeStartIdx + i;
+        const page = srcDoc.getPage(pageIdx);
         const data = fields[i] || {};
 
-        const qrContent = fillTemplate(qrText, data).trim() || `Page-${i + 1}`;
+        const qrContent = fillTemplate(qrText, data).trim() || `Page-${pageIdx + 1}`;
         let qrImage = qrImageCache.get(qrContent);
         if (!qrImage) {
           const qrPng = await QRCode.toBuffer(qrContent, { margin: 1, width: 300 });
@@ -1026,7 +1045,6 @@ app.post("/api/generate", upload.single("pdf"), async (req, res) => {
           const lineHeight = fSize + 3;
           const totalTextHeight = (lines.length - 1) * lineHeight + fSize;
           
-          // Vertically center the text block with respect to the QR code height
           const qrCenterY = y + size / 2;
           const startY = qrCenterY + totalTextHeight / 2 - fSize * 0.85;
 
@@ -1057,11 +1075,11 @@ app.post("/api/generate", upload.single("pdf"), async (req, res) => {
     if (isSample) {
       order = [0];
     } else {
-      order = fields.map((_, i) => i);
+      order = fields.map((_, i) => rangeStartIdx + i);
       if (sortBy !== "none") {
         order.sort((a, b) => {
-          const itemA = fields[a];
-          const itemB = fields[b];
+          const itemA = fields[a - rangeStartIdx] || {};
+          const itemB = fields[b - rangeStartIdx] || {};
 
           if (sortBy === "sku") {
             const skuA = (itemA.sku || "").toString().toLowerCase();

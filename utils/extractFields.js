@@ -11,7 +11,7 @@ function get(text, regex) {
   return m ? m[1].trim() : "";
 }
 
-function extractFieldsFromPages(pageTexts, useNativeScript = false) {
+function extractFieldsFromPages(pageTexts, useNativeScript = false, startPageOffset = 1) {
   return pageTexts.map((rawText, idx) => {
     const text = rawText || "";
     const lines = text
@@ -98,13 +98,10 @@ function extractFieldsFromPages(pageTexts, useNativeScript = false) {
     let color = "";
 
     // Check single-line combined table row first
-    const lineMatch = text.match(
-      /SKU\s+Size\s+Qty\s+Color\s+Order No\.?\s*[\r\n]+([^\r\n]+)/i
+    const productLine = lines.find((l) =>
+      /^\d+\s+\S+/.test(l) ||
+      /SKU|Style|Item|Product/i.test(l)
     );
-    if (lineMatch) {
-      const tokens = lineMatch[1].trim().split(/\s+/);
-      const orderNoTokIdx = tokens.findIndex((t) => /^\d{6,}(_\d+)?$/.test(t));
-      sku = tokens[0] || "";
 
       let qtyIdx = -1;
       for (let i = 1; i < tokens.length; i++) {
