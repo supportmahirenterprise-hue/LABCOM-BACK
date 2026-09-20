@@ -154,7 +154,7 @@ function getUserEmail(req) {
 app.get("/health", (req, res) => {
   res.json({
     status: "ok",
-    version: "1.0.4-native-fontdirs-fix",
+    version: "1.0.5-pdf-fallback-fix",
     fontDirsConfigured: systemFontDirs.length,
     message: "LABCOM Backend is live and healthy!",
   });
@@ -163,7 +163,7 @@ app.get("/health", (req, res) => {
 app.get("/api/health", (req, res) =>
   res.json({
     ok: true,
-    version: "1.0.4-native-fontdirs-fix",
+    version: "1.0.5-pdf-fallback-fix",
     fontDirsConfigured: systemFontDirs.length,
   })
 );
