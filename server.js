@@ -1194,13 +1194,34 @@ app.get("/api/returns", async (req, res) => {
     const topReasonEntry = Array.from(reasonMap.entries()).sort((a, b) => b[1] - a[1])[0];
     const topStateEntry = Array.from(stateMap.entries()).sort((a, b) => b[1] - a[1])[0];
 
-    const filteredTotal = await returnsCol.countDocuments(query);
-    const returnsList = await returnsCol
-      .find(query)
-      .sort({ updatedAt: -1, _id: -1 })
-      .skip((pageNum - 1) * pageSize)
-      .limit(pageSize)
-      .toArray();
+    function formatSortableDate(dStr) {
+      if (!dStr || typeof dStr !== "string") return "";
+      const s = dStr.trim();
+      if (!s) return "";
+      if (/^\d{4}-\d{2}-\d{2}/.test(s)) return s.substring(0, 10);
+      const m = s.match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{4})/);
+      if (m) {
+        return `${m[3]}-${m[2].padStart(2, "0")}-${m[1].padStart(2, "0")}`;
+      }
+      const d = new Date(s);
+      if (!isNaN(d.getTime())) return d.toISOString().substring(0, 10);
+      return s;
+    }
+
+    const matchedDocs = await returnsCol.find(query).toArray();
+
+    matchedDocs.sort((a, b) => {
+      const dateA = formatSortableDate(a.deliveredDate || a.returnCreatedDate || a.dispatchDate) || "0000-00-00";
+      const dateB = formatSortableDate(b.deliveredDate || b.returnCreatedDate || b.dispatchDate) || "0000-00-00";
+      if (dateB !== dateA) {
+        return dateB.localeCompare(dateA);
+      }
+      return (b._id?.toString() || "").localeCompare(a._id?.toString() || "");
+    });
+
+    const filteredTotal = matchedDocs.length;
+    const startIndex = (pageNum - 1) * pageSize;
+    const returnsList = matchedDocs.slice(startIndex, startIndex + pageSize);
 
     const formattedList = returnsList.map((r) => ({
       id: r._id.toString(),
