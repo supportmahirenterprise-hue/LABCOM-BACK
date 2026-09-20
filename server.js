@@ -1308,7 +1308,7 @@ async function checkReturnHistoryForPages(fields, userEmail) {
     fields.forEach((f) => {
       const fSubOrder = (f.subOrderNo || f.orderNo || "").trim();
       const fOrder = (f.orderNo || "").trim();
-      const fMobile = (f.mobile || "").trim();
+      const fMobile = (f.mobileNumber || f.mobile || "").trim();
       const fName = (f.customerName || "").trim().toLowerCase();
 
       const matchedReturns = allUserReturns.filter((r) => {
@@ -1335,8 +1335,8 @@ async function checkReturnHistoryForPages(fields, userEmail) {
           subOrderNo: fSubOrder || fOrder || "N/A",
           orderNo: fOrder || "N/A",
           customerName: f.customerName || "N/A",
-          customerMobile: f.mobile || "N/A",
-          customerAddress: f.address || "N/A",
+          customerMobile: fMobile || "N/A",
+          customerAddress: f.customerAddress || f.address || "N/A",
           state: f.state || "India",
           sku: f.sku || "N/A",
           qty: f.qty || 1,

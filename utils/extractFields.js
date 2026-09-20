@@ -26,6 +26,7 @@ function extractFieldsFromPages(pageTexts, useNativeScript = false, startPageOff
     let subOrderNo =
       get(text, /Order No\.?\s*[:\s]*[\r\n]*\s*(\d{10,}_\d+)/i) ||
       (text.match(/\b(\d{10,}_\d+)\b/) ? text.match(/\b(\d{10,}_\d+)\b/)[1] : "") ||
+      (text.match(/(\d{10,}_\d+)/) ? text.match(/(\d{10,}_\d+)/)[1] : "") ||
       get(text, /Sub\s*Order\s*(?:No|ID)\.?\s*[:\s]*[\r\n]*\s*(\S+)/i) ||
       "";
 
@@ -33,7 +34,7 @@ function extractFieldsFromPages(pageTexts, useNativeScript = false, startPageOff
       get(text, /Purchase Order No\.?\s*[:\s]*[\r\n]*\s*(\S+)/i) ||
       (subOrderNo ? subOrderNo.split("_")[0] : "") ||
       get(text, /Order No\.?\s*[:\s]*[\r\n]*\s*(\S+)/i) ||
-      get(text, /(\d{10,})/) ||
+      (text.match(/(\d{10,})/) ? text.match(/(\d{10,})/)[1] : "") ||
       "";
 
     if (!subOrderNo) {
@@ -99,38 +100,61 @@ function extractFieldsFromPages(pageTexts, useNativeScript = false, startPageOff
     let qty = "";
     let color = "";
 
-    // Check single-line combined table row first
-    const lineMatch = text.match(
-      /SKU\s+Size\s+Qty\s+Color\s+Order No\.?\s*[\r\n]+([^\r\n]+)/i
-    );
-    if (lineMatch) {
-      const tokens = lineMatch[1].trim().split(/\s+/);
-      const orderNoTokIdx = tokens.findIndex((t) => /^\d{6,}(_\d+)?$/.test(t));
-      sku = tokens[0] || "";
+    // 5a. Concatenated line parser (e.g., "LOVE_BIRDS_4_piecesFree Size1NA329870648555400000_1")
+    for (const line of lines) {
+      const subMatch = line.match(/(\d{10,}_\d+)/);
+      if (subMatch) {
+        if (!subOrderNo || subOrderNo.includes("AWB") || subOrderNo.includes("SKU")) {
+          subOrderNo = subMatch[1];
+          orderNo = subOrderNo.split("_")[0];
+        }
 
-      let qtyIdx = -1;
-      for (let i = 1; i < tokens.length; i++) {
-        if (
-          /^\d+$/.test(tokens[i]) &&
-          (orderNoTokIdx === -1 || i < orderNoTokIdx)
-        ) {
-          qtyIdx = i;
+        const before = line.substring(0, line.indexOf(subMatch[1]));
+        const m = before.match(/^(.*?)(Free Size|Free|XXXL|XXL|XL|L|M|S|XS|NA)(\d+)(.*)$/i);
+        if (m) {
+          sku = m[1].trim();
+          size = m[2].trim();
+          qty = m[3].trim();
+          color = m[4].trim();
           break;
         }
       }
-      if (qtyIdx > -1) {
-        size = tokens.slice(1, qtyIdx).join(" ");
-        qty = tokens[qtyIdx];
-        color =
-          orderNoTokIdx > -1
-            ? tokens.slice(qtyIdx + 1, orderNoTokIdx).join(" ")
-            : tokens[qtyIdx + 1] || "";
+    }
+
+    // Check single-line combined table row first
+    if (!sku || sku.includes("SKU")) {
+      const lineMatch = text.match(
+        /SKU\s+Size\s+Qty\s+Color\s+Order No\.?\s*[\r\n]+([^\r\n]+)/i
+      );
+      if (lineMatch) {
+        const tokens = lineMatch[1].trim().split(/\s+/);
+        const orderNoTokIdx = tokens.findIndex((t) => /^\d{6,}(_\d+)?$/.test(t));
+        sku = tokens[0] || "";
+
+        let qtyIdx = -1;
+        for (let i = 1; i < tokens.length; i++) {
+          if (
+            /^\d+$/.test(tokens[i]) &&
+            (orderNoTokIdx === -1 || i < orderNoTokIdx)
+          ) {
+            qtyIdx = i;
+            break;
+          }
+        }
+        if (qtyIdx > -1) {
+          size = tokens.slice(1, qtyIdx).join(" ");
+          qty = tokens[qtyIdx];
+          color =
+            orderNoTokIdx > -1
+              ? tokens.slice(qtyIdx + 1, orderNoTokIdx).join(" ")
+              : tokens[qtyIdx + 1] || "";
+        }
+        if (!orderNo && orderNoTokIdx > -1) orderNo = tokens[orderNoTokIdx];
       }
-      if (!orderNo && orderNoTokIdx > -1) orderNo = tokens[orderNoTokIdx];
     }
 
     // Multi-line / Newline-separated table block parser (standard in Meesho pdf-parse)
-    if (!sku || !qty) {
+    if (!sku || sku.includes("SKU") || !qty) {
       let prodIdx = lines.findIndex((l) => /Product Details/i.test(l));
       if (prodIdx === -1) {
         prodIdx = lines.findIndex((l) => /^SKU$/i.test(l) || /SKU\s+Size/i.test(l));
@@ -145,11 +169,11 @@ function extractFieldsFromPages(pageTexts, useNativeScript = false, startPageOff
           sectionLines.push(lines[i]);
         }
 
-        const headerRegex = /^(Product Details|SKU|Size|Qty|Color|Order No\.?|Quantity)$/i;
+        const headerRegex = /^(Product Details|SKU|Size|Qty|Color|Order No\.?|Quantity|SKUSizeQtyColorOrder No\.?|AWBSKUQty\.?SizePacked)$/i;
         const dataTokens = sectionLines.filter((l) => !headerRegex.test(l));
 
         if (dataTokens.length > 0) {
-          if (!sku) sku = dataTokens[0] || "";
+          if (!sku || sku.includes("SKU")) sku = dataTokens[0] || "";
 
           for (let i = 1; i < dataTokens.length; i++) {
             const tok = dataTokens[i];
