@@ -200,7 +200,19 @@ async function getPerPageText(buffer, startPage = 1, endPage = null) {
       },
     });
   } catch (err) {
-    console.error("[getPerPageText] Error parsing PDF text:", err.message);
+    console.error("[getPerPageText] pdfParse failed:", err.message);
+    try {
+      const pdfDoc = await PDFDocument.load(buffer, { ignoreEncryption: true });
+      const totalPages = pdfDoc.getPageCount();
+      const startP = Math.max(1, startPage);
+      const endP = endPage ? Math.min(totalPages, endPage) : totalPages;
+      const fallbackCount = Math.max(0, endP - startP + 1);
+      for (let i = 0; i < fallbackCount; i++) {
+        pageTexts.push("");
+      }
+    } catch (fallbackErr) {
+      console.error("[getPerPageText] pdf-lib fallback failed:", fallbackErr.message);
+    }
   }
   return pageTexts;
 }
@@ -1021,7 +1033,7 @@ app.post("/api/generate", upload.single("pdf"), async (req, res) => {
       });
     }
 
-    const srcDoc = await PDFDocument.load(req.file.buffer);
+    const srcDoc = await PDFDocument.load(req.file.buffer, { ignoreEncryption: true });
     const totalPdfPages = srcDoc.getPageCount();
 
     const rangeStartIdx = isSample ? 0 : Math.max(0, startP - 1);
