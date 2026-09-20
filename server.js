@@ -1293,6 +1293,77 @@ app.delete("/api/returns", async (req, res) => {
 
 // ---- PDF ROUTES -----------------------------------------------------------
 
+async function checkReturnHistoryForPages(fields, userEmail) {
+  if (!Array.isArray(fields) || fields.length === 0) return [];
+  try {
+    const db = await getDb();
+    const returnsCol = db.collection("returns");
+    const activeEmail = userEmail || "guest";
+
+    const allUserReturns = await returnsCol.find({ userEmail: activeEmail }).toArray();
+    if (allUserReturns.length === 0) return [];
+
+    const returnWarnings = [];
+
+    fields.forEach((f) => {
+      const fSubOrder = (f.subOrderNo || f.orderNo || "").trim();
+      const fOrder = (f.orderNo || "").trim();
+      const fMobile = (f.mobile || "").trim();
+      const fName = (f.customerName || "").trim().toLowerCase();
+
+      const matchedReturns = allUserReturns.filter((r) => {
+        // 1. Match subOrderNo or orderNo
+        if (fSubOrder && r.subOrderNo && r.subOrderNo === fSubOrder) return true;
+        if (fOrder && r.orderNo && r.orderNo === fOrder) return true;
+
+        // 2. Match Mobile Number
+        if (fMobile && fMobile !== "N/A" && fMobile.length >= 10 && r.customerMobile && r.customerMobile === fMobile) return true;
+
+        // 3. Match Customer Name + State / Address
+        if (fName && fName !== "n/a" && fName.length > 3 && r.customerName) {
+          const rName = r.customerName.trim().toLowerCase();
+          if (rName === fName || (rName.length > 3 && (rName.includes(fName) || fName.includes(rName)))) {
+            if (f.state && r.state && f.state.toLowerCase() === r.state.toLowerCase()) return true;
+          }
+        }
+        return false;
+      });
+
+      if (matchedReturns.length > 0) {
+        returnWarnings.push({
+          page: f.page || 1,
+          subOrderNo: fSubOrder || fOrder || "N/A",
+          orderNo: fOrder || "N/A",
+          customerName: f.customerName || "N/A",
+          customerMobile: f.mobile || "N/A",
+          customerAddress: f.address || "N/A",
+          state: f.state || "India",
+          sku: f.sku || "N/A",
+          qty: f.qty || 1,
+          returnCount: matchedReturns.length,
+          previousReturns: matchedReturns.map((r) => ({
+            id: r._id.toString(),
+            subOrderNo: r.subOrderNo || r.orderNo || "N/A",
+            returnType: r.returnType || "Return",
+            returnReason: r.returnReason || "N/A",
+            detailedReturnReason: r.detailedReturnReason || "",
+            sku: r.sku || "N/A",
+            qty: r.qty || 1,
+            deliveredDate: r.deliveredDate || r.returnCreatedDate || "N/A",
+            courierPartner: r.courierPartner || "Courier",
+            awbNumber: r.awbNumber || "N/A",
+          })),
+        });
+      }
+    });
+
+    return returnWarnings;
+  } catch (err) {
+    console.error("Error checking return history for pages:", err);
+    return [];
+  }
+}
+
 // 1. Upload a PDF, get back extracted per-page fields
 app.post("/api/preview", upload.single("pdf"), async (req, res) => {
   req.setTimeout(600000); // 10 minutes timeout for large PDFs
@@ -1314,7 +1385,10 @@ app.post("/api/preview", upload.single("pdf"), async (req, res) => {
     // Auto-save extracted customer details to DB asynchronously
     saveCustomerOrders(fields, getUserEmail(req)).catch((e) => console.error("Auto-save customer error:", e));
 
-    res.json({ pageCount: fields.length, pages: fields });
+    // Check past return history for extracted label pages
+    const returnWarnings = await checkReturnHistoryForPages(fields, getUserEmail(req));
+
+    res.json({ pageCount: fields.length, pages: fields, returnWarnings });
   } catch (err) {
     console.error("Preview API Error:", err);
     res.status(500).json({ error: err.message || "Failed to generate PDF preview" });
