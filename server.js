@@ -1121,6 +1121,7 @@ app.get("/api/returns", async (req, res) => {
       search = "",
       type = "ALL",
       state = "ALL",
+      sku = "ALL",
       page = "1",
       limit = "25",
     } = req.query;
@@ -1136,6 +1137,10 @@ app.get("/api/returns", async (req, res) => {
 
     if (state && state !== "ALL") {
       query.state = state;
+    }
+
+    if (sku && sku !== "ALL") {
+      query.sku = sku;
     }
 
     if (search.trim()) {
@@ -1177,7 +1182,15 @@ app.get("/api/returns", async (req, res) => {
       if (r.state) stateMap.set(r.state, (stateMap.get(r.state) || 0) + 1);
     });
 
-    const topSkuEntry = Array.from(skuMap.entries()).sort((a, b) => b[1] - a[1])[0];
+    const allSkusWithCounts = Array.from(skuMap.entries())
+      .map(([name, count]) => ({
+        name,
+        label: `${name} (${count})`,
+        count,
+      }))
+      .sort((a, b) => b.count - a.count);
+
+    const topSkuEntry = allSkusWithCounts[0];
     const topReasonEntry = Array.from(reasonMap.entries()).sort((a, b) => b[1] - a[1])[0];
     const topStateEntry = Array.from(stateMap.entries()).sort((a, b) => b[1] - a[1])[0];
 
@@ -1222,9 +1235,10 @@ app.get("/api/returns", async (req, res) => {
         totalReturns,
         customerReturnsCount,
         rtoCount,
-        topReturnedSku: topSkuEntry ? { name: topSkuEntry[0], count: topSkuEntry[1] } : null,
+        topReturnedSku: topSkuEntry ? { name: topSkuEntry.name, count: topSkuEntry.count } : null,
         topReturnReason: topReasonEntry ? { name: topReasonEntry[0], count: topReasonEntry[1] } : null,
         topReturnState: topStateEntry ? { name: topStateEntry[0], count: topStateEntry[1] } : null,
+        allSkusWithCounts: allSkusWithCounts || [],
       },
       pagination: {
         total: filteredTotal,
