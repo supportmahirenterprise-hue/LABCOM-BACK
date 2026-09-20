@@ -142,12 +142,13 @@ async function drawTextOrImageLine(page, srcDoc, text, x, y, size, font, color, 
 
 // Helper to get authenticated user email from header or query or body
 function getUserEmail(req) {
+  if (!req) return "";
   return (
-    req.headers["x-user-email"] ||
-    req.query.email ||
+    (req.headers && req.headers["x-user-email"]) ||
+    (req.query && req.query.email) ||
     (req.body && req.body.email) ||
     ""
-  ).toLowerCase().trim();
+  ).toString().toLowerCase().trim();
 }
 
 app.get("/health", (req, res) => {
@@ -177,18 +178,30 @@ const upload = multer({
 async function getPerPageText(buffer, startPage = 1, endPage = null) {
   const pageTexts = [];
   let pageIdx = 0;
-  await pdfParse(buffer, {
-    pagerender: async (pageData) => {
-      pageIdx++;
-      if (pageIdx >= startPage && (!endPage || pageIdx <= endPage)) {
-        const textContent = await pageData.getTextContent();
-        const text = textContent.items.map((i) => i.str).join("\n");
-        pageTexts.push(text);
-        return text;
-      }
-      return "";
-    },
-  });
+  try {
+    await pdfParse(buffer, {
+      pagerender: async (pageData) => {
+        pageIdx++;
+        if (pageIdx >= startPage && (!endPage || pageIdx <= endPage)) {
+          try {
+            const textContent = await pageData.getTextContent();
+            const text = (textContent && Array.isArray(textContent.items))
+              ? textContent.items.map((i) => (i && typeof i.str === "string") ? i.str : "").join("\n")
+              : "";
+            pageTexts.push(text);
+            return text;
+          } catch (pe) {
+            console.warn(`[getPerPageText] Page ${pageIdx} text extraction error:`, pe.message);
+            pageTexts.push("");
+            return "";
+          }
+        }
+        return "";
+      },
+    });
+  } catch (err) {
+    console.error("[getPerPageText] Error parsing PDF text:", err.message);
+  }
   return pageTexts;
 }
 
@@ -932,7 +945,9 @@ app.get("/api/customer-analysis/history", async (req, res) => {
 app.post("/api/preview", upload.single("pdf"), async (req, res) => {
   req.setTimeout(600000); // 10 minutes timeout for large PDFs
   try {
-    if (!req.file) return res.status(400).json({ error: "PDF file is required" });
+    if (!req.file || !req.file.buffer || req.file.buffer.length === 0) {
+      return res.status(400).json({ error: "PDF file is required and cannot be empty" });
+    }
     const useNative =
       req.body?.useNativeScript === "true" ||
       req.query?.useNativeScript === "true" ||
@@ -949,8 +964,8 @@ app.post("/api/preview", upload.single("pdf"), async (req, res) => {
 
     res.json({ pageCount: fields.length, pages: fields });
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: err.message });
+    console.error("Preview API Error:", err);
+    res.status(500).json({ error: err.message || "Failed to generate PDF preview" });
   }
 });
 

@@ -12,12 +12,15 @@ function get(text, regex) {
 }
 
 function extractFieldsFromPages(pageTexts, useNativeScript = false, startPageOffset = 1) {
+  if (!Array.isArray(pageTexts)) return [];
   return pageTexts.map((rawText, idx) => {
-    const text = rawText || "";
-    const lines = text
-      .split(/[\r\n]+/)
-      .map((l) => l.trim())
-      .filter(Boolean);
+    const actualPageNumber = (parseInt(startPageOffset, 10) || 1) + idx;
+    try {
+      const text = rawText || "";
+      const lines = text
+        .split(/[\r\n]+/)
+        .map((l) => l.trim())
+        .filter(Boolean);
 
     // 1. Order No & Sub Order ID
     let subOrderNo =
@@ -201,6 +204,29 @@ function extractFieldsFromPages(pageTexts, useNativeScript = false, startPageOff
       regionalThankYouNative: regionalInfo.regionalThankYouNative,
       regionalLanguage: regionalInfo.regionalLanguage,
     };
+    } catch (err) {
+      console.error(`[extractFieldsFromPages] Error parsing page ${actualPageNumber}:`, err.message);
+      return {
+        page: actualPageNumber,
+        orderNo: "",
+        subOrderNo: "",
+        paymentType: "COD",
+        orderDate: "",
+        invoiceNo: "",
+        customerName: "",
+        customerAddress: "",
+        mobileNumber: "",
+        sku: "",
+        size: "",
+        qty: "1",
+        color: "",
+        state: "India",
+        regionalThankYou: "Thank you!",
+        regionalThankYouLatin: "Thank you!",
+        regionalThankYouNative: "Thank you!",
+        regionalLanguage: "Hindi",
+      };
+    }
   });
 }
 
