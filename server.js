@@ -8,6 +8,7 @@ const QRCode = require("qrcode");
 const { ObjectId } = require("mongodb");
 const { getDb } = require("./db");
 const { extractFieldsFromPages } = require("./utils/extractFields");
+const { parseCsv } = require("./utils/csvParser");
 const { sendWhatsAppMedia, DEFAULT_RECEIVER_NUMBER } = require("./utils/whatsapp");
 const { generateSummaryCanvasImage } = require("./utils/summaryCanvas");
 
@@ -947,6 +948,310 @@ app.get("/api/customer-analysis/history", async (req, res) => {
     });
   } catch (err) {
     console.error("Customer History API Error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ---- RETURNS & REVERSE LOGISTICS ENGINE -----------------------------------
+
+// 1. POST /api/returns/upload - Parse CSV & upsert return entries into DB
+app.post("/api/returns/upload", upload.single("file"), async (req, res) => {
+  try {
+    if (!req.file || !req.file.buffer) {
+      return res.status(400).json({ error: "CSV file is required" });
+    }
+
+    const csvContent = req.file.buffer.toString("utf-8");
+    const rawRows = parseCsv(csvContent);
+
+    if (!rawRows || rawRows.length === 0) {
+      return res.status(400).json({ error: "No valid rows found in the CSV file" });
+    }
+
+    const activeEmail = getUserEmail(req) || "guest";
+    const db = await getDb();
+    const returnsCol = db.collection("returns");
+    const ordersCol = db.collection("orders");
+
+    const validReturns = [];
+    const subOrderNos = new Set();
+    const orderNos = new Set();
+
+    for (const row of rawRows) {
+      const subOrderNo = (
+        row["Suborder Number"] ||
+        row["Suborder No"] ||
+        row["Sub Order ID"] ||
+        row["Sub Order No"] ||
+        row["Order Number"] ||
+        ""
+      ).trim();
+
+      const orderNo = (
+        row["Order Number"] ||
+        row["Order No"] ||
+        (subOrderNo ? subOrderNo.split("_")[0] : "")
+      ).trim();
+
+      if (!subOrderNo && !orderNo) continue;
+
+      const sku = (row["SKU"] || "").trim();
+      const productName = (row["Product Name"] || "").trim();
+      const qty = parseInt(row["Qty"] || "1", 10) || 1;
+      const returnType = (row["Type of Return"] || row["Return Type"] || "Return").trim();
+      const subType = (row["Sub Type"] || "").trim();
+      const dispatchDate = (row["Dispatch Date"] || "").trim();
+      const returnCreatedDate = (row["Return Created Date"] || row["Return Date"] || "").trim();
+      const deliveredDate = (row["Delivered Date"] || "").trim();
+      const courierPartner = (row["Courier Partner"] || row["Courier"] || "").trim();
+      const awbNumber = (row["AWB Number"] || row["AWB"] || "").trim();
+      const trackingLink = (row["Tracking Link"] || "").trim();
+      const proofOfDelivery = (row["Proof of Delivery"] || "").trim();
+      const returnReason = (row["Return Reason"] || row["Reason"] || "N/A").trim();
+      const detailedReturnReason = (row["Detailed Return Reason"] || "").trim();
+
+      validReturns.push({
+        subOrderNo,
+        orderNo,
+        sku,
+        productName,
+        qty,
+        returnType,
+        subType,
+        dispatchDate,
+        returnCreatedDate,
+        deliveredDate,
+        courierPartner,
+        awbNumber,
+        trackingLink,
+        proofOfDelivery,
+        returnReason,
+        detailedReturnReason,
+        userEmail: activeEmail,
+      });
+
+      if (subOrderNo) subOrderNos.add(subOrderNo);
+      if (orderNo) orderNos.add(orderNo);
+    }
+
+    if (validReturns.length === 0) {
+      return res.status(400).json({ error: "No valid return records extracted from CSV" });
+    }
+
+    // Cross-match with existing DB orders to enrich customer name, address, state, mobile
+    const existingOrders = orderNos.size > 0
+      ? await ordersCol.find({
+          $or: [
+            { subOrderNo: { $in: Array.from(subOrderNos) } },
+            { orderNo: { $in: Array.from(orderNos) } },
+          ],
+        }).toArray()
+      : [];
+
+    const orderMap = new Map();
+    existingOrders.forEach((o) => {
+      if (o.subOrderNo) orderMap.set(o.subOrderNo, o);
+      if (o.orderNo) orderMap.set(o.orderNo, o);
+    });
+
+    const bulkOps = validReturns.map((item) => {
+      const matchedOrder = orderMap.get(item.subOrderNo) || orderMap.get(item.orderNo) || {};
+
+      const doc = {
+        subOrderNo: item.subOrderNo,
+        orderNo: item.orderNo,
+        sku: item.sku || matchedOrder.sku || "",
+        productName: item.productName || "",
+        qty: item.qty || matchedOrder.qty || 1,
+        returnType: item.returnType,
+        subType: item.subType,
+        dispatchDate: item.dispatchDate,
+        returnCreatedDate: item.returnCreatedDate,
+        deliveredDate: item.deliveredDate,
+        courierPartner: item.courierPartner,
+        awbNumber: item.awbNumber,
+        trackingLink: item.trackingLink,
+        proofOfDelivery: item.proofOfDelivery,
+        returnReason: item.returnReason,
+        detailedReturnReason: item.detailedReturnReason,
+        // Matched Customer Info from DB
+        customerName: matchedOrder.customerName || "N/A",
+        customerMobile: matchedOrder.customerMobile || "N/A",
+        customerAddress: matchedOrder.customerAddress || "N/A",
+        state: matchedOrder.state || "India",
+        district: matchedOrder.district || "Central",
+        paymentType: matchedOrder.paymentType || "COD",
+        originalOrderDate: matchedOrder.orderDate || "",
+        userEmail: activeEmail,
+        updatedAt: new Date(),
+      };
+
+      return {
+        updateOne: {
+          filter: { subOrderNo: item.subOrderNo, userEmail: activeEmail },
+          update: { $set: doc, $setOnInsert: { createdAt: new Date() } },
+          upsert: true,
+        },
+      };
+    });
+
+    if (bulkOps.length > 0) {
+      await returnsCol.bulkWrite(bulkOps);
+    }
+
+    res.json({
+      success: true,
+      count: validReturns.length,
+      message: `Successfully processed and saved ${validReturns.length} return entries into Database!`,
+    });
+  } catch (err) {
+    console.error("Return Upload API Error:", err);
+    res.status(500).json({ error: err.message || "Failed to parse and save return CSV" });
+  }
+});
+
+// 2. GET /api/returns - Fetch return records with summary stats
+app.get("/api/returns", async (req, res) => {
+  try {
+    const db = await getDb();
+    const returnsCol = db.collection("returns");
+    const activeEmail = getUserEmail(req) || "guest";
+
+    const {
+      search = "",
+      type = "ALL",
+      state = "ALL",
+      page = "1",
+      limit = "25",
+    } = req.query;
+
+    const pageNum = parseInt(page, 10) || 1;
+    const pageSize = parseInt(limit, 10) || 25;
+
+    const query = { userEmail: activeEmail };
+
+    if (type && type !== "ALL") {
+      query.returnType = { $regex: new RegExp(type, "i") };
+    }
+
+    if (state && state !== "ALL") {
+      query.state = state;
+    }
+
+    if (search.trim()) {
+      const q = search.trim();
+      const regex = new RegExp(q, "i");
+      query.$or = [
+        { subOrderNo: regex },
+        { orderNo: regex },
+        { sku: regex },
+        { customerName: regex },
+        { customerMobile: regex },
+        { customerAddress: regex },
+        { returnReason: regex },
+        { detailedReturnReason: regex },
+        { courierPartner: regex },
+        { awbNumber: regex },
+        { state: regex },
+      ];
+    }
+
+    const allReturns = await returnsCol.find({ userEmail: activeEmail }).toArray();
+
+    const totalReturns = allReturns.length;
+    let customerReturnsCount = 0;
+    let rtoCount = 0;
+    const skuMap = new Map();
+    const reasonMap = new Map();
+    const stateMap = new Map();
+
+    allReturns.forEach((r) => {
+      const isRto = /RTO|Courier/i.test(r.returnType || "");
+      if (isRto) rtoCount++;
+      else customerReturnsCount++;
+
+      if (r.sku) skuMap.set(r.sku, (skuMap.get(r.sku) || 0) + 1);
+      if (r.returnReason && r.returnReason !== "NA") {
+        reasonMap.set(r.returnReason, (reasonMap.get(r.returnReason) || 0) + 1);
+      }
+      if (r.state) stateMap.set(r.state, (stateMap.get(r.state) || 0) + 1);
+    });
+
+    const topSkuEntry = Array.from(skuMap.entries()).sort((a, b) => b[1] - a[1])[0];
+    const topReasonEntry = Array.from(reasonMap.entries()).sort((a, b) => b[1] - a[1])[0];
+    const topStateEntry = Array.from(stateMap.entries()).sort((a, b) => b[1] - a[1])[0];
+
+    const filteredTotal = await returnsCol.countDocuments(query);
+    const returnsList = await returnsCol
+      .find(query)
+      .sort({ updatedAt: -1, _id: -1 })
+      .skip((pageNum - 1) * pageSize)
+      .limit(pageSize)
+      .toArray();
+
+    const formattedList = returnsList.map((r) => ({
+      id: r._id.toString(),
+      subOrderNo: r.subOrderNo || r.orderNo || "N/A",
+      orderNo: r.orderNo || "N/A",
+      sku: r.sku || "N/A",
+      productName: r.productName || "",
+      qty: r.qty || 1,
+      returnType: r.returnType || "Return",
+      subType: r.subType || "",
+      dispatchDate: r.dispatchDate || "",
+      returnCreatedDate: r.returnCreatedDate || "",
+      deliveredDate: r.deliveredDate || "",
+      courierPartner: r.courierPartner || "Courier",
+      awbNumber: r.awbNumber || "N/A",
+      trackingLink: r.trackingLink || "",
+      proofOfDelivery: r.proofOfDelivery || "",
+      returnReason: r.returnReason || "N/A",
+      detailedReturnReason: r.detailedReturnReason || "",
+      customerName: r.customerName || "N/A",
+      customerMobile: r.customerMobile || "N/A",
+      customerAddress: r.customerAddress || "N/A",
+      state: r.state || "India",
+      district: r.district || "Central",
+      paymentType: r.paymentType || "COD",
+      originalOrderDate: r.originalOrderDate || "",
+      updatedAt: r.updatedAt,
+    }));
+
+    res.json({
+      summary: {
+        totalReturns,
+        customerReturnsCount,
+        rtoCount,
+        topReturnedSku: topSkuEntry ? { name: topSkuEntry[0], count: topSkuEntry[1] } : null,
+        topReturnReason: topReasonEntry ? { name: topReasonEntry[0], count: topReasonEntry[1] } : null,
+        topReturnState: topStateEntry ? { name: topStateEntry[0], count: topStateEntry[1] } : null,
+      },
+      pagination: {
+        total: filteredTotal,
+        page: pageNum,
+        limit: pageSize,
+        totalPages: Math.ceil(filteredTotal / pageSize) || 1,
+      },
+      returns: formattedList,
+    });
+  } catch (err) {
+    console.error("Fetch Returns API Error:", err);
+    res.status(500).json({ error: err.message || "Failed to fetch returns data" });
+  }
+});
+
+// 3. DELETE /api/returns - Delete a return record by ID
+app.delete("/api/returns", async (req, res) => {
+  try {
+    const db = await getDb();
+    const id = req.query.id;
+    if (!id) return res.status(400).json({ error: "Return ID is required" });
+
+    const returnsCol = db.collection("returns");
+    await returnsCol.deleteOne({ _id: new ObjectId(id) });
+    res.json({ success: true, message: "Return entry deleted successfully!" });
+  } catch (err) {
+    console.error("Delete Return API Error:", err);
     res.status(500).json({ error: err.message });
   }
 });
