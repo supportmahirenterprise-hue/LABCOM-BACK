@@ -64,8 +64,8 @@ app.use(
   })
 );
 app.options("*", cors());
-app.use(express.json({ limit: "100mb" }));
-app.use(express.urlencoded({ limit: "100mb", extended: true }));
+app.use(express.json({ limit: "500mb" }));
+app.use(express.urlencoded({ limit: "500mb", extended: true }));
 
 async function drawTextOrImageLine(page, srcDoc, text, x, y, size, font, color, imageCache = null) {
   const isUnicode = /[^\x00-\x7F]/.test(text);
@@ -171,12 +171,92 @@ app.get("/api/health", (req, res) =>
 
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 100 * 1024 * 1024, fieldSize: 100 * 1024 * 1024 }, // 100 MB
+  limits: { fileSize: 500 * 1024 * 1024, fieldSize: 500 * 1024 * 1024 }, // 500 MB limit
 });
 
 // ---- helpers -------------------------------------------------------------
 
-async function getPerPageText(buffer, startPage = 1, endPage = null) {
+async function extractBatchPageTexts(pdfDoc, originalBuffer, batchStart, batchEnd) {
+  const count = batchEnd - batchStart + 1;
+  try {
+    const subDoc = await PDFDocument.create();
+    const pageIndices = [];
+    for (let p = batchStart - 1; p < batchEnd; p++) {
+      pageIndices.push(p);
+    }
+
+    const copiedPages = await subDoc.copyPages(pdfDoc, pageIndices);
+    copiedPages.forEach((cp) => subDoc.addPage(cp));
+    const subBuffer = await subDoc.save();
+
+    let pageIdxInSub = 0;
+    const subTexts = new Array(count).fill("");
+
+    await pdfParse(subBuffer, {
+      pagerender: async (pageData) => {
+        const curIdx = pageIdxInSub++;
+        if (curIdx < count) {
+          try {
+            const textContent = await pageData.getTextContent();
+            if (textContent && Array.isArray(textContent.items)) {
+              subTexts[curIdx] = textContent.items
+                .map((i) => (i && typeof i.str === "string" ? i.str : ""))
+                .join("\n");
+            } else {
+              subTexts[curIdx] = "";
+            }
+          } catch (pe) {
+            console.warn(`[getPerPageText] Sub-page ${curIdx + 1} text render warning:`, pe.message);
+            subTexts[curIdx] = "";
+          }
+        }
+        return subTexts[curIdx] || "";
+      },
+    });
+
+    return subTexts;
+  } catch (batchErr) {
+    console.warn(`[getPerPageText] Batch ${batchStart}-${batchEnd} slice error: ${batchErr.message}. Falling back to 1-by-1 page parsing...`);
+    const fallbackTexts = [];
+    for (let p = batchStart; p <= batchEnd; p++) {
+      const singleText = await extractSinglePageText(pdfDoc, originalBuffer, p);
+      fallbackTexts.push(singleText);
+    }
+    return fallbackTexts;
+  }
+}
+
+async function extractSinglePageText(pdfDoc, originalBuffer, pageNum) {
+  try {
+    if (pdfDoc) {
+      const subDoc = await PDFDocument.create();
+      const copied = await subDoc.copyPages(pdfDoc, [pageNum - 1]);
+      subDoc.addPage(copied[0]);
+      const singleBuffer = await subDoc.save();
+
+      let extracted = "";
+      await pdfParse(singleBuffer, {
+        pagerender: async (pageData) => {
+          try {
+            const textContent = await pageData.getTextContent();
+            if (textContent && Array.isArray(textContent.items)) {
+              extracted = textContent.items
+                .map((i) => (i && typeof i.str === "string" ? i.str : ""))
+                .join("\n");
+            }
+          } catch (e) {}
+          return extracted;
+        },
+      });
+      return extracted || "";
+    }
+  } catch (e) {
+    console.warn(`[getPerPageText] Single page ${pageNum} extraction warning:`, e.message);
+  }
+  return "";
+}
+
+async function parseEntireBufferFallback(buffer, startPage = 1, endPage = null) {
   const pageTexts = [];
   let pageIdx = 0;
   try {
@@ -192,7 +272,6 @@ async function getPerPageText(buffer, startPage = 1, endPage = null) {
             pageTexts.push(text);
             return text;
           } catch (pe) {
-            console.warn(`[getPerPageText] Page ${pageIdx} text extraction error:`, pe.message);
             pageTexts.push("");
             return "";
           }
@@ -201,20 +280,46 @@ async function getPerPageText(buffer, startPage = 1, endPage = null) {
       },
     });
   } catch (err) {
-    console.error("[getPerPageText] pdfParse failed:", err.message);
-    try {
-      const pdfDoc = await PDFDocument.load(buffer, { ignoreEncryption: true });
-      const totalPages = pdfDoc.getPageCount();
-      const startP = Math.max(1, startPage);
-      const endP = endPage ? Math.min(totalPages, endPage) : totalPages;
-      const fallbackCount = Math.max(0, endP - startP + 1);
-      for (let i = 0; i < fallbackCount; i++) {
-        pageTexts.push("");
-      }
-    } catch (fallbackErr) {
-      console.error("[getPerPageText] pdf-lib fallback failed:", fallbackErr.message);
-    }
+    console.error("[parseEntireBufferFallback] pdfParse failed:", err.message);
   }
+  return pageTexts;
+}
+
+async function getPerPageText(buffer, startPage = 1, endPage = null) {
+  if (!buffer || !Buffer.isBuffer(buffer) || buffer.length === 0) {
+    return [];
+  }
+
+  let totalPdfPages = 0;
+  let pdfDoc = null;
+
+  try {
+    pdfDoc = await PDFDocument.load(buffer, { ignoreEncryption: true });
+    totalPdfPages = pdfDoc.getPageCount();
+  } catch (pdfLibErr) {
+    console.warn("[getPerPageText] pdf-lib primary load warning:", pdfLibErr.message);
+  }
+
+  if (!totalPdfPages || totalPdfPages <= 0) {
+    return await parseEntireBufferFallback(buffer, startPage, endPage);
+  }
+
+  const sPage = Math.max(1, parseInt(startPage, 10) || 1);
+  const ePage = endPage ? Math.min(totalPdfPages, parseInt(endPage, 10)) : totalPdfPages;
+
+  if (sPage > totalPdfPages || sPage > ePage) {
+    return [];
+  }
+
+  const pageTexts = [];
+  const BATCH_SIZE = 50;
+
+  for (let batchStart = sPage; batchStart <= ePage; batchStart += BATCH_SIZE) {
+    const batchEnd = Math.min(ePage, batchStart + BATCH_SIZE - 1);
+    const batchTexts = await extractBatchPageTexts(pdfDoc, buffer, batchStart, batchEnd);
+    pageTexts.push(...batchTexts);
+  }
+
   return pageTexts;
 }
 
@@ -1303,31 +1408,62 @@ async function checkReturnHistoryForPages(fields, userEmail) {
     const allUserReturns = await returnsCol.find({ userEmail: activeEmail }).toArray();
     if (allUserReturns.length === 0) return [];
 
+    const subOrderMap = new Map();
+    const orderMap = new Map();
+    const mobileMap = new Map();
+
+    for (const r of allUserReturns) {
+      const sub = (r.subOrderNo || r.orderNo || "").trim();
+      const ord = (r.orderNo || "").trim();
+      const mob = (r.customerMobile || "").trim();
+
+      if (sub) {
+        if (!subOrderMap.has(sub)) subOrderMap.set(sub, []);
+        subOrderMap.get(sub).push(r);
+      }
+      if (ord) {
+        if (!orderMap.has(ord)) orderMap.set(ord, []);
+        orderMap.get(ord).push(r);
+      }
+      if (mob && mob.length >= 10) {
+        if (!mobileMap.has(mob)) mobileMap.set(mob, []);
+        mobileMap.get(mob).push(r);
+      }
+    }
+
     const returnWarnings = [];
 
-    fields.forEach((f) => {
+    for (const f of fields) {
       const fSubOrder = (f.subOrderNo || f.orderNo || "").trim();
       const fOrder = (f.orderNo || "").trim();
       const fMobile = (f.mobileNumber || f.mobile || "").trim();
       const fName = (f.customerName || "").trim().toLowerCase();
 
-      const matchedReturns = allUserReturns.filter((r) => {
-        // 1. Match subOrderNo or orderNo
-        if (fSubOrder && r.subOrderNo && r.subOrderNo === fSubOrder) return true;
-        if (fOrder && r.orderNo && r.orderNo === fOrder) return true;
+      const matchedMap = new Map();
 
-        // 2. Match Mobile Number
-        if (fMobile && fMobile !== "N/A" && fMobile.length >= 10 && r.customerMobile && r.customerMobile === fMobile) return true;
-
-        // 3. Match Customer Name + State / Address
-        if (fName && fName !== "n/a" && fName.length > 3 && r.customerName) {
-          const rName = r.customerName.trim().toLowerCase();
-          if (rName === fName || (rName.length > 3 && (rName.includes(fName) || fName.includes(rName)))) {
-            if (f.state && r.state && f.state.toLowerCase() === r.state.toLowerCase()) return true;
+      if (fSubOrder && subOrderMap.has(fSubOrder)) {
+        for (const r of subOrderMap.get(fSubOrder)) matchedMap.set(r._id.toString(), r);
+      }
+      if (fOrder && orderMap.has(fOrder)) {
+        for (const r of orderMap.get(fOrder)) matchedMap.set(r._id.toString(), r);
+      }
+      if (fMobile && fMobile !== "N/A" && fMobile.length >= 10 && mobileMap.has(fMobile)) {
+        for (const r of mobileMap.get(fMobile)) matchedMap.set(r._id.toString(), r);
+      }
+      if (fName && fName !== "n/a" && fName.length > 3) {
+        for (const r of allUserReturns) {
+          if (!matchedMap.has(r._id.toString()) && r.customerName) {
+            const rName = r.customerName.trim().toLowerCase();
+            if (rName === fName || (rName.length > 3 && (rName.includes(fName) || fName.includes(rName)))) {
+              if (f.state && r.state && f.state.toLowerCase() === r.state.toLowerCase()) {
+                matchedMap.set(r._id.toString(), r);
+              }
+            }
           }
         }
-        return false;
-      });
+      }
+
+      const matchedReturns = Array.from(matchedMap.values());
 
       if (matchedReturns.length > 0) {
         returnWarnings.push({
@@ -1355,7 +1491,7 @@ async function checkReturnHistoryForPages(fields, userEmail) {
           })),
         });
       }
-    });
+    }
 
     return returnWarnings;
   } catch (err) {
@@ -1366,11 +1502,18 @@ async function checkReturnHistoryForPages(fields, userEmail) {
 
 // 1. Upload a PDF, get back extracted per-page fields
 app.post("/api/preview", upload.single("pdf"), async (req, res) => {
-  req.setTimeout(600000); // 10 minutes timeout for large PDFs
+  req.setTimeout(1800000); // 30 minutes timeout for large PDFs
+  res.setTimeout(1800000);
   try {
     if (!req.file || !req.file.buffer || req.file.buffer.length === 0) {
-      return res.status(400).json({ error: "PDF file is required and cannot be empty" });
+      return res.status(400).json({ error: "PDF file is required and cannot be empty. Please select a valid PDF file." });
     }
+
+    const header = req.file.buffer.slice(0, 5).toString("utf-8");
+    if (!header.includes("%PDF")) {
+      return res.status(400).json({ error: "Invalid file format. The uploaded file is not a valid PDF document." });
+    }
+
     const useNative =
       req.body?.useNativeScript === "true" ||
       req.query?.useNativeScript === "true" ||
@@ -1397,10 +1540,16 @@ app.post("/api/preview", upload.single("pdf"), async (req, res) => {
 
 // 2. Upload PDF + config, stamp QR/details, reorder pages, return processed PDF
 app.post("/api/generate", upload.single("pdf"), async (req, res) => {
-  req.setTimeout(600000); // 10 minutes timeout for large PDFs
+  req.setTimeout(1800000); // 30 minutes timeout for large PDFs
+  res.setTimeout(1800000);
   try {
     if (!req.file || !req.file.buffer || req.file.buffer.length === 0) {
-      return res.status(400).json({ error: "PDF file is required and cannot be empty" });
+      return res.status(400).json({ error: "PDF file is required and cannot be empty. Please select a valid PDF file." });
+    }
+
+    const header = req.file.buffer.slice(0, 5).toString("utf-8");
+    if (!header.includes("%PDF")) {
+      return res.status(400).json({ error: "Invalid file format. The uploaded file is not a valid PDF document." });
     }
 
     const {
@@ -2458,8 +2607,27 @@ app.get("/r/:code", async (req, res) => {
   }
 });
 
+// Global error handling middleware for Multer, JSON parsing, or uncaught route errors
+app.use((err, req, res, next) => {
+  console.error("[GlobalServerError]", err);
+  if (err instanceof multer.MulterError) {
+    if (err.code === "LIMIT_FILE_SIZE") {
+      return res.status(400).json({
+        error: "File too large. Maximum allowed PDF file size is 500MB.",
+      });
+    }
+    return res.status(400).json({ error: `File upload error: ${err.message}` });
+  }
+  if (res.headersSent) {
+    return next(err);
+  }
+  res.status(err.status || 500).json({
+    error: err.message || "An unexpected error occurred on the server.",
+  });
+});
+
 const PORT = process.env.PORT || 5001;
 const server = app.listen(PORT, () => console.log(`🚀 LABCOM Backend running on http://localhost:${PORT}`));
-server.timeout = 10 * 60 * 1000; // 10 minutes timeout
-server.keepAliveTimeout = 10 * 60 * 1000;
-server.headersTimeout = 10 * 60 * 1000 + 1000;
+server.timeout = 30 * 60 * 1000; // 30 minutes timeout
+server.keepAliveTimeout = 30 * 60 * 1000;
+server.headersTimeout = 30 * 60 * 1000 + 1000;
