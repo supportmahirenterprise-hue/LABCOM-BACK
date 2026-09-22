@@ -1500,6 +1500,95 @@ async function checkReturnHistoryForPages(fields, userEmail) {
   }
 }
 
+async function checkDuplicateOrdersForPages(fields, userEmail) {
+  if (!Array.isArray(fields) || fields.length === 0) return [];
+  try {
+    const db = await getDb();
+    const ordersCol = db.collection("orders");
+    const activeEmail = (userEmail || "guest").toLowerCase().trim();
+
+    const orderNos = new Set();
+    fields.forEach((f) => {
+      const sub = (f.subOrderNo || "").trim();
+      const ord = (f.orderNo || "").trim();
+      if (sub) orderNos.add(sub);
+      if (ord) orderNos.add(ord);
+    });
+
+    if (orderNos.size === 0) return [];
+
+    const existingOrders = await ordersCol
+      .find({
+        userEmail: activeEmail,
+        $or: [
+          { subOrderNo: { $in: Array.from(orderNos) } },
+          { orderNo: { $in: Array.from(orderNos) } },
+        ],
+      })
+      .toArray();
+
+    if (existingOrders.length === 0) return [];
+
+    const orderMap = new Map();
+    existingOrders.forEach((o) => {
+      if (o.subOrderNo) orderMap.set(o.subOrderNo, o);
+      if (o.orderNo) orderMap.set(o.orderNo, o);
+    });
+
+    const duplicateOrderWarnings = [];
+    fields.forEach((f) => {
+      const sub = (f.subOrderNo || f.orderNo || "").trim();
+      const ord = (f.orderNo || "").trim();
+      const matched = orderMap.get(sub) || orderMap.get(ord);
+
+      if (matched) {
+        let savedDate = "Previously saved";
+        if (matched.createdAt) {
+          try {
+            savedDate = new Date(matched.createdAt).toLocaleDateString("en-IN", {
+              year: "numeric",
+              month: "short",
+              day: "numeric",
+            });
+          } catch (e) {}
+        } else if (matched.orderDate) {
+          savedDate = matched.orderDate;
+        }
+
+        duplicateOrderWarnings.push({
+          page: f.page || 1,
+          subOrderNo: sub || ord || "N/A",
+          orderNo: ord || "N/A",
+          customerName: f.customerName || "N/A",
+          customerMobile: f.mobileNumber || f.mobile || "N/A",
+          customerAddress: f.customerAddress || f.address || "N/A",
+          state: f.state || "India",
+          sku: f.sku || "N/A",
+          qty: f.qty || 1,
+          existingOrder: {
+            subOrderNo: matched.subOrderNo || matched.orderNo || "N/A",
+            orderNo: matched.orderNo || "N/A",
+            customerName: matched.customerName || "N/A",
+            customerMobile: matched.customerMobile || "N/A",
+            customerAddress: matched.customerAddress || "N/A",
+            state: matched.state || "India",
+            sku: matched.sku || "N/A",
+            qty: matched.qty || 1,
+            orderDate: matched.orderDate || "N/A",
+            paymentType: matched.paymentType || "COD",
+            savedAt: savedDate,
+          },
+        });
+      }
+    });
+
+    return duplicateOrderWarnings;
+  } catch (err) {
+    console.error("Error checking duplicate orders for pages:", err);
+    return [];
+  }
+}
+
 // 1. Upload a PDF, get back extracted per-page fields
 app.post("/api/preview", upload.single("pdf"), async (req, res) => {
   req.setTimeout(1800000); // 30 minutes timeout for large PDFs
@@ -1531,7 +1620,10 @@ app.post("/api/preview", upload.single("pdf"), async (req, res) => {
     // Check past return history for extracted label pages
     const returnWarnings = await checkReturnHistoryForPages(fields, getUserEmail(req));
 
-    res.json({ pageCount: fields.length, pages: fields, returnWarnings });
+    // Check previously saved duplicate orders
+    const duplicateOrderWarnings = await checkDuplicateOrdersForPages(fields, getUserEmail(req));
+
+    res.json({ pageCount: fields.length, pages: fields, returnWarnings, duplicateOrderWarnings });
   } catch (err) {
     console.error("Preview API Error:", err);
     res.status(500).json({ error: err.message || "Failed to generate PDF preview" });
