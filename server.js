@@ -1438,34 +1438,20 @@ async function checkReturnHistoryForPages(fields, userEmail) {
       const fOrder = (f.orderNo || "").trim();
       const fMobile = (f.mobileNumber || f.mobile || "").trim();
       const fName = (f.customerName || "").trim().toLowerCase();
+      const fAddress = (f.customerAddress || f.address || "").trim().toLowerCase();
 
-      const matchedMap = new Map();
-
+      // 1. EXACT Order / SubOrder ID match -> Trigger Warning Modal
+      const exactMatchedMap = new Map();
       if (fSubOrder && subOrderMap.has(fSubOrder)) {
-        for (const r of subOrderMap.get(fSubOrder)) matchedMap.set(r._id.toString(), r);
+        for (const r of subOrderMap.get(fSubOrder)) exactMatchedMap.set(r._id.toString(), r);
       }
       if (fOrder && orderMap.has(fOrder)) {
-        for (const r of orderMap.get(fOrder)) matchedMap.set(r._id.toString(), r);
-      }
-      if (fMobile && fMobile !== "N/A" && fMobile.length >= 10 && mobileMap.has(fMobile)) {
-        for (const r of mobileMap.get(fMobile)) matchedMap.set(r._id.toString(), r);
-      }
-      if (fName && fName !== "n/a" && fName.length > 3) {
-        for (const r of allUserReturns) {
-          if (!matchedMap.has(r._id.toString()) && r.customerName) {
-            const rName = r.customerName.trim().toLowerCase();
-            if (rName === fName || (rName.length > 3 && (rName.includes(fName) || fName.includes(rName)))) {
-              if (f.state && r.state && f.state.toLowerCase() === r.state.toLowerCase()) {
-                matchedMap.set(r._id.toString(), r);
-              }
-            }
-          }
-        }
+        for (const r of orderMap.get(fOrder)) exactMatchedMap.set(r._id.toString(), r);
       }
 
-      const matchedReturns = Array.from(matchedMap.values());
+      const exactMatchedReturns = Array.from(exactMatchedMap.values());
 
-      if (matchedReturns.length > 0) {
+      if (exactMatchedReturns.length > 0) {
         returnWarnings.push({
           page: f.page || 1,
           subOrderNo: fSubOrder || fOrder || "N/A",
@@ -1476,8 +1462,8 @@ async function checkReturnHistoryForPages(fields, userEmail) {
           state: f.state || "India",
           sku: f.sku || "N/A",
           qty: f.qty || 1,
-          returnCount: matchedReturns.length,
-          previousReturns: matchedReturns.map((r) => ({
+          returnCount: exactMatchedReturns.length,
+          previousReturns: exactMatchedReturns.map((r) => ({
             id: r._id.toString(),
             subOrderNo: r.subOrderNo || r.orderNo || "N/A",
             returnType: r.returnType || "Return",
@@ -1490,6 +1476,40 @@ async function checkReturnHistoryForPages(fields, userEmail) {
             awbNumber: r.awbNumber || "N/A",
           })),
         });
+      }
+
+      // 2. Customer Name + Address / Mobile Match -> Attach customerReturnAlert tag to page (NO Warning Modal)
+      const customerMatchedMap = new Map();
+      if (fMobile && fMobile !== "N/A" && fMobile.length >= 10 && mobileMap.has(fMobile)) {
+        for (const r of mobileMap.get(fMobile)) customerMatchedMap.set(r._id.toString(), r);
+      }
+      if (fName && fName !== "n/a" && fName.length > 3) {
+        for (const r of allUserReturns) {
+          if (!customerMatchedMap.has(r._id.toString()) && r.customerName) {
+            const rName = r.customerName.trim().toLowerCase();
+            const rAddress = (r.customerAddress || r.address || "").trim().toLowerCase();
+            const nameMatches = rName === fName || (rName.length > 3 && (rName.includes(fName) || fName.includes(rName)));
+            const addressMatches = fAddress && rAddress && (rAddress.includes(fAddress.slice(0, 15)) || fAddress.includes(rAddress.slice(0, 15)));
+            const stateMatches = f.state && r.state && f.state.toLowerCase() === r.state.toLowerCase();
+
+            if (nameMatches && (addressMatches || stateMatches)) {
+              customerMatchedMap.set(r._id.toString(), r);
+            }
+          }
+        }
+      }
+
+      const customerMatchedReturns = Array.from(customerMatchedMap.values());
+      if (customerMatchedReturns.length > 0) {
+        f.customerReturnAlert = {
+          returnCount: customerMatchedReturns.length,
+          latestReason: customerMatchedReturns[0].returnReason || "Past buyer return record in DB",
+          previousReturns: customerMatchedReturns.map((r) => ({
+            subOrderNo: r.subOrderNo || r.orderNo || "N/A",
+            returnReason: r.returnReason || "N/A",
+            deliveredDate: r.deliveredDate || r.returnCreatedDate || "N/A",
+          })),
+        };
       }
     }
 
