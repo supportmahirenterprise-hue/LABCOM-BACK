@@ -1398,6 +1398,27 @@ app.delete("/api/returns", async (req, res) => {
 
 // ---- PDF ROUTES -----------------------------------------------------------
 
+function isValidMobile(mob) {
+  if (!mob || mob === "N/A" || mob === "n/a") return false;
+  const clean = mob.replace(/\D/g, "");
+  if (clean.length < 10) return false;
+  if (/^0+$/.test(clean) || /^1+$/.test(clean) || /^9+$/.test(clean) || clean === "1234567890") return false;
+  return true;
+}
+
+function isValidName(name) {
+  if (!name) return false;
+  const n = name.trim().toLowerCase();
+  if (n.length < 3 || n === "n/a" || n === "customer" || n === "buyer" || n === "meesho") return false;
+  return true;
+}
+
+function isValidOrderNo(ord) {
+  if (!ord) return false;
+  const o = ord.trim().toLowerCase();
+  return o.length >= 3 && o !== "n/a";
+}
+
 async function checkReturnHistoryForPages(fields, userEmail) {
   if (!Array.isArray(fields) || fields.length === 0) return [];
   try {
@@ -1417,17 +1438,18 @@ async function checkReturnHistoryForPages(fields, userEmail) {
       const ord = (r.orderNo || "").trim();
       const mob = (r.customerMobile || "").trim();
 
-      if (sub) {
+      if (isValidOrderNo(sub)) {
         if (!subOrderMap.has(sub)) subOrderMap.set(sub, []);
         subOrderMap.get(sub).push(r);
       }
-      if (ord) {
+      if (isValidOrderNo(ord)) {
         if (!orderMap.has(ord)) orderMap.set(ord, []);
         orderMap.get(ord).push(r);
       }
-      if (mob && mob.length >= 10) {
-        if (!mobileMap.has(mob)) mobileMap.set(mob, []);
-        mobileMap.get(mob).push(r);
+      if (isValidMobile(mob)) {
+        const cleanMob = mob.replace(/\D/g, "");
+        if (!mobileMap.has(cleanMob)) mobileMap.set(cleanMob, []);
+        mobileMap.get(cleanMob).push(r);
       }
     }
 
@@ -1436,34 +1458,59 @@ async function checkReturnHistoryForPages(fields, userEmail) {
     for (const f of fields) {
       const fSubOrder = (f.subOrderNo || f.orderNo || "").trim();
       const fOrder = (f.orderNo || "").trim();
-      const fMobile = (f.mobileNumber || f.mobile || "").trim();
+      const rawMobile = (f.mobileNumber || f.mobile || "").trim();
+      const cleanMobile = rawMobile.replace(/\D/g, "");
       const fName = (f.customerName || "").trim().toLowerCase();
       const fAddress = (f.customerAddress || f.address || "").trim().toLowerCase();
 
-      // 1. EXACT Order / SubOrder ID match -> Trigger Warning Modal
-      const exactMatchedMap = new Map();
-      if (fSubOrder && subOrderMap.has(fSubOrder)) {
-        for (const r of subOrderMap.get(fSubOrder)) exactMatchedMap.set(r._id.toString(), r);
+      const matchedMap = new Map();
+
+      // Match 1: Exact SubOrder ID match
+      if (isValidOrderNo(fSubOrder) && subOrderMap.has(fSubOrder)) {
+        for (const r of subOrderMap.get(fSubOrder)) matchedMap.set(r._id.toString(), r);
       }
-      if (fOrder && orderMap.has(fOrder)) {
-        for (const r of orderMap.get(fOrder)) exactMatchedMap.set(r._id.toString(), r);
+      // Match 2: Exact Order ID match
+      if (isValidOrderNo(fOrder) && orderMap.has(fOrder)) {
+        for (const r of orderMap.get(fOrder)) matchedMap.set(r._id.toString(), r);
+      }
+      // Match 3: Customer Mobile Number match
+      if (isValidMobile(rawMobile) && mobileMap.has(cleanMobile)) {
+        for (const r of mobileMap.get(cleanMobile)) matchedMap.set(r._id.toString(), r);
+      }
+      // Match 4: Customer Name + Address/State match
+      if (isValidName(fName)) {
+        for (const r of allUserReturns) {
+          if (!matchedMap.has(r._id.toString()) && isValidName(r.customerName)) {
+            const rName = r.customerName.trim().toLowerCase();
+            const rAddress = (r.customerAddress || r.address || "").trim().toLowerCase();
+            const nameMatches = rName === fName || (rName.length > 3 && (rName.includes(fName) || fName.includes(rName)));
+            const addressMatches = fAddress && rAddress && (rAddress.includes(fAddress.slice(0, 12)) || fAddress.includes(rAddress.slice(0, 12)));
+            const stateMatches = f.state && r.state && f.state.toLowerCase() === r.state.toLowerCase();
+
+            if (nameMatches && (addressMatches || stateMatches)) {
+              matchedMap.set(r._id.toString(), r);
+            }
+          }
+        }
       }
 
-      const exactMatchedReturns = Array.from(exactMatchedMap.values());
+      const matchedReturns = Array.from(matchedMap.values());
 
-      if (exactMatchedReturns.length > 0) {
+      // If customer HAS past returns in DB -> Include in returnWarnings for Modal popup!
+      // If customer has NO past returns -> SKIP (First-time order, no modal popup)!
+      if (matchedReturns.length > 0) {
         returnWarnings.push({
           page: f.page || 1,
           subOrderNo: fSubOrder || fOrder || "N/A",
           orderNo: fOrder || "N/A",
           customerName: f.customerName || "N/A",
-          customerMobile: fMobile || "N/A",
+          customerMobile: rawMobile || "N/A",
           customerAddress: f.customerAddress || f.address || "N/A",
           state: f.state || "India",
           sku: f.sku || "N/A",
           qty: f.qty || 1,
-          returnCount: exactMatchedReturns.length,
-          previousReturns: exactMatchedReturns.map((r) => ({
+          returnCount: matchedReturns.length,
+          previousReturns: matchedReturns.map((r) => ({
             id: r._id.toString(),
             subOrderNo: r.subOrderNo || r.orderNo || "N/A",
             returnType: r.returnType || "Return",
@@ -1476,35 +1523,11 @@ async function checkReturnHistoryForPages(fields, userEmail) {
             awbNumber: r.awbNumber || "N/A",
           })),
         });
-      }
 
-      // 2. Customer Name + Address / Mobile Match -> Attach customerReturnAlert tag to page (NO Warning Modal)
-      const customerMatchedMap = new Map();
-      if (fMobile && fMobile !== "N/A" && fMobile.length >= 10 && mobileMap.has(fMobile)) {
-        for (const r of mobileMap.get(fMobile)) customerMatchedMap.set(r._id.toString(), r);
-      }
-      if (fName && fName !== "n/a" && fName.length > 3) {
-        for (const r of allUserReturns) {
-          if (!customerMatchedMap.has(r._id.toString()) && r.customerName) {
-            const rName = r.customerName.trim().toLowerCase();
-            const rAddress = (r.customerAddress || r.address || "").trim().toLowerCase();
-            const nameMatches = rName === fName || (rName.length > 3 && (rName.includes(fName) || fName.includes(rName)));
-            const addressMatches = fAddress && rAddress && (rAddress.includes(fAddress.slice(0, 15)) || fAddress.includes(rAddress.slice(0, 15)));
-            const stateMatches = f.state && r.state && f.state.toLowerCase() === r.state.toLowerCase();
-
-            if (nameMatches && (addressMatches || stateMatches)) {
-              customerMatchedMap.set(r._id.toString(), r);
-            }
-          }
-        }
-      }
-
-      const customerMatchedReturns = Array.from(customerMatchedMap.values());
-      if (customerMatchedReturns.length > 0) {
         f.customerReturnAlert = {
-          returnCount: customerMatchedReturns.length,
-          latestReason: customerMatchedReturns[0].returnReason || "Past buyer return record in DB",
-          previousReturns: customerMatchedReturns.map((r) => ({
+          returnCount: matchedReturns.length,
+          latestReason: matchedReturns[0].returnReason || "Past buyer return record in DB",
+          previousReturns: matchedReturns.map((r) => ({
             subOrderNo: r.subOrderNo || r.orderNo || "N/A",
             returnReason: r.returnReason || "N/A",
             deliveredDate: r.deliveredDate || r.returnCreatedDate || "N/A",
