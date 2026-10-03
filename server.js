@@ -1548,7 +1548,8 @@ async function checkDuplicateOrdersForPages(fields, userEmail) {
   try {
     const db = await getDb();
     const ordersCol = db.collection("orders");
-    const activeEmail = (userEmail || "guest").toLowerCase().trim();
+    const returnsCol = db.collection("returns");
+    const activeEmail = userEmail || "guest";
 
     const orderNos = new Set();
     fields.forEach((f) => {
@@ -1572,56 +1573,122 @@ async function checkDuplicateOrdersForPages(fields, userEmail) {
 
     if (existingOrders.length === 0) return [];
 
-    const orderMap = new Map();
+    // ONLY flag if customer has a record in returnsCol
+    const allUserReturns = await returnsCol.find({ userEmail: activeEmail }).toArray();
+    if (allUserReturns.length === 0) return [];
+
+    const returnSubOrderMap = new Map();
+    const returnOrderMap = new Map();
+    const returnMobileMap = new Map();
+
+    for (const r of allUserReturns) {
+      const sub = (r.subOrderNo || r.orderNo || "").trim();
+      const ord = (r.orderNo || "").trim();
+      const mob = (r.customerMobile || r.mobile || "").trim();
+
+      if (isValidOrderNo(sub)) {
+        if (!returnSubOrderMap.has(sub)) returnSubOrderMap.set(sub, []);
+        returnSubOrderMap.get(sub).push(r);
+      }
+      if (isValidOrderNo(ord)) {
+        if (!returnOrderMap.has(ord)) returnOrderMap.set(ord, []);
+        returnOrderMap.get(ord).push(r);
+      }
+      if (isValidMobile(mob)) {
+        const cleanMob = mob.replace(/\D/g, "");
+        if (!returnMobileMap.has(cleanMob)) returnMobileMap.set(cleanMob, []);
+        returnMobileMap.get(cleanMob).push(r);
+      }
+    }
+
+    const savedOrderMap = new Map();
     existingOrders.forEach((o) => {
-      if (o.subOrderNo) orderMap.set(o.subOrderNo, o);
-      if (o.orderNo) orderMap.set(o.orderNo, o);
+      if (o.subOrderNo) savedOrderMap.set(o.subOrderNo, o);
+      if (o.orderNo) savedOrderMap.set(o.orderNo, o);
     });
 
     const duplicateOrderWarnings = [];
     fields.forEach((f) => {
       const sub = (f.subOrderNo || f.orderNo || "").trim();
       const ord = (f.orderNo || "").trim();
-      const matched = orderMap.get(sub) || orderMap.get(ord);
+      const matched = savedOrderMap.get(sub) || savedOrderMap.get(ord);
 
       if (matched) {
-        let savedDate = "Previously saved";
-        if (matched.createdAt) {
-          try {
-            savedDate = new Date(matched.createdAt).toLocaleDateString("en-IN", {
-              year: "numeric",
-              month: "short",
-              day: "numeric",
-            });
-          } catch (e) {}
-        } else if (matched.orderDate) {
-          savedDate = matched.orderDate;
+        const rawMobile = (f.mobileNumber || f.mobile || matched.customerMobile || "").trim();
+        const cleanMobile = rawMobile.replace(/\D/g, "");
+        const fName = (f.customerName || matched.customerName || "").trim().toLowerCase();
+        const fAddress = (f.customerAddress || f.address || matched.customerAddress || "").trim().toLowerCase();
+
+        let hasReturn = false;
+
+        if ((isValidOrderNo(sub) && returnSubOrderMap.has(sub)) || (isValidOrderNo(ord) && returnOrderMap.has(ord))) {
+          hasReturn = true;
+        } else if (isValidOrderNo(matched.subOrderNo) && returnSubOrderMap.has(matched.subOrderNo)) {
+          hasReturn = true;
+        } else if (isValidOrderNo(matched.orderNo) && returnOrderMap.has(matched.orderNo)) {
+          hasReturn = true;
         }
 
-        duplicateOrderWarnings.push({
-          page: f.page || 1,
-          subOrderNo: sub || ord || "N/A",
-          orderNo: ord || "N/A",
-          customerName: f.customerName || "N/A",
-          customerMobile: f.mobileNumber || f.mobile || "N/A",
-          customerAddress: f.customerAddress || f.address || "N/A",
-          state: f.state || "India",
-          sku: f.sku || "N/A",
-          qty: f.qty || 1,
-          existingOrder: {
-            subOrderNo: matched.subOrderNo || matched.orderNo || "N/A",
-            orderNo: matched.orderNo || "N/A",
-            customerName: matched.customerName || "N/A",
-            customerMobile: matched.customerMobile || "N/A",
-            customerAddress: matched.customerAddress || "N/A",
-            state: matched.state || "India",
-            sku: matched.sku || "N/A",
-            qty: matched.qty || 1,
-            orderDate: matched.orderDate || "N/A",
-            paymentType: matched.paymentType || "COD",
-            savedAt: savedDate,
-          },
-        });
+        if (!hasReturn && isValidMobile(rawMobile) && returnMobileMap.has(cleanMobile)) {
+          hasReturn = true;
+        }
+
+        if (!hasReturn && isValidName(fName)) {
+          for (const r of allUserReturns) {
+            if (isValidName(r.customerName)) {
+              const rName = r.customerName.trim().toLowerCase();
+              const rAddress = (r.customerAddress || r.address || "").trim().toLowerCase();
+              const nameMatches = rName === fName || (rName.length > 3 && (rName.includes(fName) || fName.includes(rName)));
+              const addressMatches = fAddress && rAddress && (rAddress.includes(fAddress.slice(0, 12)) || fAddress.includes(rAddress.slice(0, 12)));
+              const stateMatches = (f.state || matched.state) && r.state && (f.state || matched.state).toLowerCase() === r.state.toLowerCase();
+
+              if (nameMatches && (addressMatches || stateMatches)) {
+                hasReturn = true;
+                break;
+              }
+            }
+          }
+        }
+
+        if (hasReturn) {
+          let savedDate = "Previously saved";
+          if (matched.createdAt) {
+            try {
+              savedDate = new Date(matched.createdAt).toLocaleDateString("en-IN", {
+                year: "numeric",
+                month: "short",
+                day: "numeric",
+              });
+            } catch (e) {}
+          } else if (matched.orderDate) {
+            savedDate = matched.orderDate;
+          }
+
+          duplicateOrderWarnings.push({
+            page: f.page || 1,
+            subOrderNo: sub || ord || "N/A",
+            orderNo: ord || "N/A",
+            customerName: f.customerName || "N/A",
+            customerMobile: f.mobileNumber || f.mobile || "N/A",
+            customerAddress: f.customerAddress || f.address || "N/A",
+            state: f.state || "India",
+            sku: f.sku || "N/A",
+            qty: f.qty || 1,
+            existingOrder: {
+              subOrderNo: matched.subOrderNo || matched.orderNo || "N/A",
+              orderNo: matched.orderNo || "N/A",
+              customerName: matched.customerName || "N/A",
+              customerMobile: matched.customerMobile || "N/A",
+              customerAddress: matched.customerAddress || "N/A",
+              state: matched.state || "India",
+              sku: matched.sku || "N/A",
+              qty: matched.qty || 1,
+              orderDate: matched.orderDate || "N/A",
+              paymentType: matched.paymentType || "COD",
+              savedAt: savedDate,
+            },
+          });
+        }
       }
     });
 
