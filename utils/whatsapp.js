@@ -2,9 +2,6 @@ const https = require("https");
 
 const WA_API_URL = process.env.WA_API_URL || "https://wa.lextrack.in/api/whatsapp/send-media";
 const WA_API_KEY = process.env.WA_API_KEY || "wa_c6854599bd4b7a54cad78edbdd6ace51";
-const WA_BEARER_TOKEN =
-  process.env.WA_BEARER_TOKEN ||
-  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOiI2YTVkZjQ3MzBjOWQwZTA0Nzg2OTBkMDkiLCJ1c2VybmFtZSI6IlZpc2hhbCIsImlhdCI6MTc4ODc4Mjg2MSwiZXhwIjoxNzkxMzc0ODYxfQ.mfXOSRinxqUpVpXBpaLQ4wHwaz0i9_Ni7RTxOi19k-4";
 const DEFAULT_RECEIVER_NUMBER = process.env.WA_DEFAULT_RECEIVER || "918140148878";
 
 function sendWhatsAppMedia({
@@ -53,7 +50,6 @@ function sendWhatsAppMedia({
         headers: {
           "Content-Type": "application/json",
           "x-api-key": WA_API_KEY,
-          Authorization: `Bearer ${WA_BEARER_TOKEN}`,
         },
       },
       (res) => {
