@@ -1140,96 +1140,125 @@ app.get("/api/insights/dashboard", async (req, res) => {
     const db = await getDb();
     const customersCol = db.collection("customers");
     const returnsCol = db.collection("return_entries");
+    const returnsCol2 = db.collection("returns");
     const scansCol = db.collection("qr_scans");
 
-    const [allCustomers, allReturns, allScans] = await Promise.all([
+    const [allCustomers, allReturns1, allReturns2, allScans] = await Promise.all([
       customersCol.find({}).toArray(),
       returnsCol.find({}).toArray(),
+      returnsCol2.find({}).toArray(),
       scansCol.find({}).toArray(),
     ]);
 
-    // -------------------------------------------------------------------------
-    // 1. SKU PERFORMANCE & PAUSE PRODUCT DECISION MATRIX
-    // -------------------------------------------------------------------------
+    const allReturns = [...allReturns1, ...allReturns2];
+
     const skuOrderMap = {};
     const skuReturnMap = {};
     const skuRtoCountMap = {};
     const skuCustomerReturnMap = {};
+    const skuDisplayNameMap = {};
+
+    function normalizeSkuKey(s) {
+      if (!s) return "";
+      return s.trim().toLowerCase().replace(/[\s_\-]+/g, "_");
+    }
 
     // Collect Orders from Customer History
     allCustomers.forEach((c) => {
       if (c.orders && Array.isArray(c.orders)) {
         c.orders.forEach((o) => {
-          const sku = (o.sku || "General / Unknown").trim();
+          const rawSku = (o.sku || "General / Unknown").trim();
+          const normKey = normalizeSkuKey(rawSku);
+          if (!skuDisplayNameMap[normKey]) {
+            skuDisplayNameMap[normKey] = rawSku;
+          }
           const qty = Number(o.qty || o.quantity || 1);
-          skuOrderMap[sku] = (skuOrderMap[sku] || 0) + qty;
+          skuOrderMap[normKey] = (skuOrderMap[normKey] || 0) + qty;
         });
       }
     });
 
     // Collect Scans if order counts are low
     allScans.forEach((s) => {
-      const sku = (s.sku || "General / Unknown").trim();
-      if (!skuOrderMap[sku]) {
-        skuOrderMap[sku] = 1;
+      const rawSku = (s.sku || "General / Unknown").trim();
+      const normKey = normalizeSkuKey(rawSku);
+      if (!skuDisplayNameMap[normKey]) {
+        skuDisplayNameMap[normKey] = rawSku;
+      }
+      if (!skuOrderMap[normKey]) {
+        skuOrderMap[normKey] = 1;
       }
     });
 
     // Collect Returns
     allReturns.forEach((r) => {
-      const sku = (r.sku || "General / Unknown").trim();
+      const rawSku = (r.sku || "General / Unknown").trim();
+      const normKey = normalizeSkuKey(rawSku);
+      if (!skuDisplayNameMap[normKey]) {
+        skuDisplayNameMap[normKey] = rawSku;
+      }
       const qty = Number(r.qty || 1);
       const isRTO = (r.returnType || "").toLowerCase().includes("rto");
 
-      skuReturnMap[sku] = (skuReturnMap[sku] || 0) + qty;
+      skuReturnMap[normKey] = (skuReturnMap[normKey] || 0) + qty;
       if (isRTO) {
-        skuRtoCountMap[sku] = (skuRtoCountMap[sku] || 0) + qty;
+        skuRtoCountMap[normKey] = (skuRtoCountMap[normKey] || 0) + qty;
       } else {
-        skuCustomerReturnMap[sku] = (skuCustomerReturnMap[sku] || 0) + qty;
+        skuCustomerReturnMap[normKey] = (skuCustomerReturnMap[normKey] || 0) + qty;
       }
 
       // Ensure SKU exists in order map if returns were logged
-      if (!skuOrderMap[sku]) {
-        skuOrderMap[sku] = (skuReturnMap[sku] || 1) + 2; // minimum baseline fallback
+      if (!skuOrderMap[normKey]) {
+        skuOrderMap[normKey] = (skuReturnMap[normKey] || 1) + 2;
       }
     });
 
     // Default Fallback SKUs for initial demonstration if database is empty
     if (Object.keys(skuOrderMap).length === 0) {
-      skuOrderMap["COLORIYO_POPAT_4"] = 48;
-      skuReturnMap["COLORIYO_POPAT_4"] = 18;
-      skuRtoCountMap["COLORIYO_POPAT_4"] = 12;
-      skuCustomerReturnMap["COLORIYO_POPAT_4"] = 6;
+      const popatKey = normalizeSkuKey("COLORIYO_POPAT_4");
+      skuDisplayNameMap[popatKey] = "COLORIYO_POPAT_4";
+      skuOrderMap[popatKey] = 48;
+      skuReturnMap[popatKey] = 18;
+      skuRtoCountMap[popatKey] = 12;
+      skuCustomerReturnMap[popatKey] = 6;
 
-      skuOrderMap["8mVLVegK"] = 82;
-      skuReturnMap["8mVLVegK"] = 4;
-      skuRtoCountMap["8mVLVegK"] = 3;
-      skuCustomerReturnMap["8mVLVegK"] = 1;
+      const vlvKey = normalizeSkuKey("8mVLVegK");
+      skuDisplayNameMap[vlvKey] = "8mVLVegK";
+      skuOrderMap[vlvKey] = 82;
+      skuReturnMap[vlvKey] = 4;
+      skuRtoCountMap[vlvKey] = 3;
+      skuCustomerReturnMap[vlvKey] = 1;
 
-      skuOrderMap["kaka_kuva_4_pieces"] = 34;
-      skuReturnMap["kaka_kuva_4_pieces"] = 9;
-      skuRtoCountMap["kaka_kuva_4_pieces"] = 6;
-      skuCustomerReturnMap["kaka_kuva_4_pieces"] = 3;
+      const kuvaKey = normalizeSkuKey("kaka_kuva_4_pieces");
+      skuDisplayNameMap[kuvaKey] = "kaka_kuva_4_pieces";
+      skuOrderMap[kuvaKey] = 34;
+      skuReturnMap[kuvaKey] = 9;
+      skuRtoCountMap[kuvaKey] = 6;
+      skuCustomerReturnMap[kuvaKey] = 3;
 
-      skuOrderMap["Lovender_Gote_7_piece"] = 56;
-      skuReturnMap["Lovender_Gote_7_piece"] = 2;
-      skuRtoCountMap["Lovender_Gote_7_piece"] = 1;
-      skuCustomerReturnMap["Lovender_Gote_7_piece"] = 1;
+      const lavenderKey = normalizeSkuKey("Lovender_Gote_7_piece");
+      skuDisplayNameMap[lavenderKey] = "Lovender_Gote_7_piece";
+      skuOrderMap[lavenderKey] = 56;
+      skuReturnMap[lavenderKey] = 2;
+      skuRtoCountMap[lavenderKey] = 1;
+      skuCustomerReturnMap[lavenderKey] = 1;
     }
 
-    const skuPerformanceMatrix = Object.keys(skuOrderMap).map((sku) => {
-      const totalOrders = skuOrderMap[sku] || 0;
-      const totalReturns = skuReturnMap[sku] || 0;
-      const rtoCount = skuRtoCountMap[sku] || 0;
-      const customerReturnCount = skuCustomerReturnMap[sku] || 0;
+    const skuPerformanceMatrix = Object.keys(skuOrderMap).map((normKey) => {
+      const sku = skuDisplayNameMap[normKey] || normKey;
+      const totalOrders = skuOrderMap[normKey] || 0;
+      const totalReturns = skuReturnMap[normKey] || 0;
+      const rtoCount = skuRtoCountMap[normKey] || 0;
+      const customerReturnCount = skuCustomerReturnMap[normKey] || 0;
+      const netDeliveredOrders = Math.max(0, totalOrders - totalReturns);
 
       const returnRate = totalOrders > 0 ? Number(((totalReturns / totalOrders) * 100).toFixed(1)) : 0;
       const rtoRate = totalOrders > 0 ? Number(((rtoCount / totalOrders) * 100).toFixed(1)) : 0;
 
-      // Decision Rule Engine
-      const shouldPause = returnRate >= 22 || (totalReturns >= 5 && returnRate >= 18);
-      const isWinner = totalOrders >= 10 && returnRate <= 10;
-      const isHighRTO = rtoRate >= 15;
+      // STRICT Seller Decision Rule Engine (Return Rate > 10% -> PAUSE PRODUCT)
+      const shouldPause = returnRate > 10 || (totalReturns >= 3 && returnRate >= 10);
+      const isWinner = totalOrders >= 5 && returnRate <= 10 && !shouldPause;
+      const isHighRTO = rtoRate >= 10 && !shouldPause;
 
       let actionBadge = "STABLE";
       let badgeStyle = "badge-slate";
@@ -1238,15 +1267,15 @@ app.get("/api/insights/dashboard", async (req, res) => {
       if (shouldPause) {
         actionBadge = "PAUSE PRODUCT";
         badgeStyle = "badge-rose";
-        adviceText = `🛑 Return rate is dangerously high (${returnRate}% with ${totalReturns} returns). Pause ads & stop manufacturing immediately to save delivery losses.`;
+        adviceText = `🛑 Return rate exceeds 10% limit (${returnRate}% with ${totalReturns} returns). Pause ads & stop production immediately to prevent losses.`;
       } else if (isHighRTO) {
         actionBadge = "HIGH RTO RISK";
         badgeStyle = "badge-amber";
-        adviceText = `⚠️ High courier undelivered RTO rate (${rtoRate}%). Verify customer phone number via WhatsApp auto-dispatch before shipping.`;
+        adviceText = `⚠️ High courier undelivered RTO rate (${rtoRate}%). Verify customer phone number via WhatsApp before shipping.`;
       } else if (isWinner) {
         actionBadge = "HIGH DEMAND WINNER";
         badgeStyle = "badge-emerald";
-        adviceText = `🚀 Top seller! High demand with low return rate (${returnRate}%). Increase ad budget & maintain safety stock.`;
+        adviceText = `🚀 Top seller! High net dispatches (${netDeliveredOrders} delivered) with safe return rate (${returnRate}%). Scale ad budget.`;
       }
 
       return {
@@ -1255,6 +1284,7 @@ app.get("/api/insights/dashboard", async (req, res) => {
         totalReturns,
         rtoCount,
         customerReturnCount,
+        netDeliveredOrders,
         returnRate,
         rtoRate,
         shouldPause,
@@ -1263,7 +1293,18 @@ app.get("/api/insights/dashboard", async (req, res) => {
         badgeStyle,
         adviceText,
       };
-    }).sort((a, b) => b.totalOrders - a.totalOrders);
+    }).sort((a, b) => {
+      // 1. Put healthy non-pause SKUs on top
+      if (a.shouldPause !== b.shouldPause) {
+        return a.shouldPause ? 1 : -1;
+      }
+      // 2. Sort by Net Delivered Orders descending (Orders minus Returns)
+      if (b.netDeliveredOrders !== a.netDeliveredOrders) {
+        return b.netDeliveredOrders - a.netDeliveredOrders;
+      }
+      // 3. Fallback to lowest return rate
+      return a.returnRate - b.returnRate;
+    });
 
     // -------------------------------------------------------------------------
     // 2. REGIONAL & DISTRICT DEMAND INTELLIGENCE (JILA-WISE)
