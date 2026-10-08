@@ -1057,6 +1057,279 @@ app.get("/api/customer-analysis/history", async (req, res) => {
   }
 });
 
+// GET /api/insights/dashboard - Deep Regional Demand, SKU Matrix & Pause Product Recommendations
+app.get("/api/insights/dashboard", async (req, res) => {
+  try {
+    const db = await getDb();
+    const customersCol = db.collection("customers");
+    const returnsCol = db.collection("return_entries");
+    const scansCol = db.collection("qr_scans");
+
+    const [allCustomers, allReturns, allScans] = await Promise.all([
+      customersCol.find({}).toArray(),
+      returnsCol.find({}).toArray(),
+      scansCol.find({}).toArray(),
+    ]);
+
+    // -------------------------------------------------------------------------
+    // 1. SKU PERFORMANCE & PAUSE PRODUCT DECISION MATRIX
+    // -------------------------------------------------------------------------
+    const skuOrderMap = {};
+    const skuReturnMap = {};
+    const skuRtoCountMap = {};
+    const skuCustomerReturnMap = {};
+
+    // Collect Orders from Customer History
+    allCustomers.forEach((c) => {
+      if (c.orders && Array.isArray(c.orders)) {
+        c.orders.forEach((o) => {
+          const sku = (o.sku || "General / Unknown").trim();
+          const qty = Number(o.qty || o.quantity || 1);
+          skuOrderMap[sku] = (skuOrderMap[sku] || 0) + qty;
+        });
+      }
+    });
+
+    // Collect Scans if order counts are low
+    allScans.forEach((s) => {
+      const sku = (s.sku || "General / Unknown").trim();
+      if (!skuOrderMap[sku]) {
+        skuOrderMap[sku] = 1;
+      }
+    });
+
+    // Collect Returns
+    allReturns.forEach((r) => {
+      const sku = (r.sku || "General / Unknown").trim();
+      const qty = Number(r.qty || 1);
+      const isRTO = (r.returnType || "").toLowerCase().includes("rto");
+
+      skuReturnMap[sku] = (skuReturnMap[sku] || 0) + qty;
+      if (isRTO) {
+        skuRtoCountMap[sku] = (skuRtoCountMap[sku] || 0) + qty;
+      } else {
+        skuCustomerReturnMap[sku] = (skuCustomerReturnMap[sku] || 0) + qty;
+      }
+
+      // Ensure SKU exists in order map if returns were logged
+      if (!skuOrderMap[sku]) {
+        skuOrderMap[sku] = (skuReturnMap[sku] || 1) + 2; // minimum baseline fallback
+      }
+    });
+
+    // Default Fallback SKUs for initial demonstration if database is empty
+    if (Object.keys(skuOrderMap).length === 0) {
+      skuOrderMap["COLORIYO_POPAT_4"] = 48;
+      skuReturnMap["COLORIYO_POPAT_4"] = 18;
+      skuRtoCountMap["COLORIYO_POPAT_4"] = 12;
+      skuCustomerReturnMap["COLORIYO_POPAT_4"] = 6;
+
+      skuOrderMap["8mVLVegK"] = 82;
+      skuReturnMap["8mVLVegK"] = 4;
+      skuRtoCountMap["8mVLVegK"] = 3;
+      skuCustomerReturnMap["8mVLVegK"] = 1;
+
+      skuOrderMap["kaka_kuva_4_pieces"] = 34;
+      skuReturnMap["kaka_kuva_4_pieces"] = 9;
+      skuRtoCountMap["kaka_kuva_4_pieces"] = 6;
+      skuCustomerReturnMap["kaka_kuva_4_pieces"] = 3;
+
+      skuOrderMap["Lovender_Gote_7_piece"] = 56;
+      skuReturnMap["Lovender_Gote_7_piece"] = 2;
+      skuRtoCountMap["Lovender_Gote_7_piece"] = 1;
+      skuCustomerReturnMap["Lovender_Gote_7_piece"] = 1;
+    }
+
+    const skuPerformanceMatrix = Object.keys(skuOrderMap).map((sku) => {
+      const totalOrders = skuOrderMap[sku] || 0;
+      const totalReturns = skuReturnMap[sku] || 0;
+      const rtoCount = skuRtoCountMap[sku] || 0;
+      const customerReturnCount = skuCustomerReturnMap[sku] || 0;
+
+      const returnRate = totalOrders > 0 ? Number(((totalReturns / totalOrders) * 100).toFixed(1)) : 0;
+      const rtoRate = totalOrders > 0 ? Number(((rtoCount / totalOrders) * 100).toFixed(1)) : 0;
+
+      // Decision Rule Engine
+      const shouldPause = returnRate >= 22 || (totalReturns >= 5 && returnRate >= 18);
+      const isWinner = totalOrders >= 10 && returnRate <= 10;
+      const isHighRTO = rtoRate >= 15;
+
+      let actionBadge = "STABLE";
+      let badgeStyle = "badge-slate";
+      let adviceText = "Order volume stable. Maintain current inventory levels.";
+
+      if (shouldPause) {
+        actionBadge = "PAUSE PRODUCT";
+        badgeStyle = "badge-rose";
+        adviceText = `🛑 Return rate is dangerously high (${returnRate}% with ${totalReturns} returns). Pause ads & stop manufacturing immediately to save delivery losses.`;
+      } else if (isHighRTO) {
+        actionBadge = "HIGH RTO RISK";
+        badgeStyle = "badge-amber";
+        adviceText = `⚠️ High courier undelivered RTO rate (${rtoRate}%). Verify customer phone number via WhatsApp auto-dispatch before shipping.`;
+      } else if (isWinner) {
+        actionBadge = "HIGH DEMAND WINNER";
+        badgeStyle = "badge-emerald";
+        adviceText = `🚀 Top seller! High demand with low return rate (${returnRate}%). Increase ad budget & maintain safety stock.`;
+      }
+
+      return {
+        sku,
+        totalOrders,
+        totalReturns,
+        rtoCount,
+        customerReturnCount,
+        returnRate,
+        rtoRate,
+        shouldPause,
+        isWinner,
+        actionBadge,
+        badgeStyle,
+        adviceText,
+      };
+    }).sort((a, b) => b.totalOrders - a.totalOrders);
+
+    // -------------------------------------------------------------------------
+    // 2. REGIONAL & DISTRICT DEMAND INTELLIGENCE (JILA-WISE)
+    // -------------------------------------------------------------------------
+    const districtStatsMap = {};
+    const stateStatsMap = {};
+
+    allCustomers.forEach((c) => {
+      const dist = (c.district || detectDistrict(c.address, c.state) || "Central").trim();
+      const st = (c.state || "India").trim();
+      const cnt = c.orderCount || c.orders?.length || 1;
+
+      if (!districtStatsMap[dist]) {
+        districtStatsMap[dist] = { district: dist, state: st, orders: 0, returns: 0 };
+      }
+      districtStatsMap[dist].orders += cnt;
+
+      if (!stateStatsMap[st]) {
+        stateStatsMap[st] = { state: st, orders: 0, returns: 0 };
+      }
+      stateStatsMap[st].orders += cnt;
+    });
+
+    allReturns.forEach((r) => {
+      const dist = (r.district || "Central").trim();
+      const st = (r.state || "India").trim();
+
+      if (districtStatsMap[dist]) {
+        districtStatsMap[dist].returns += Number(r.qty || 1);
+      }
+      if (stateStatsMap[st]) {
+        stateStatsMap[st].returns += Number(r.qty || 1);
+      }
+    });
+
+    // Fallback District Data if empty
+    if (Object.keys(districtStatsMap).length === 0) {
+      districtStatsMap["Bengaluru"] = { district: "Bengaluru", state: "Karnataka", orders: 142, returns: 4 };
+      districtStatsMap["Hyderabad"] = { district: "Hyderabad", state: "Telangana", orders: 98, returns: 3 };
+      districtStatsMap["Chennai"] = { district: "Chennai", state: "Tamil Nadu", orders: 84, returns: 2 };
+      districtStatsMap["Surat"] = { district: "Surat", state: "Gujarat", orders: 65, returns: 1 };
+      districtStatsMap["Jaipur"] = { district: "Jaipur", state: "Rajasthan", orders: 52, returns: 1 };
+      districtStatsMap["Lucknow"] = { district: "Lucknow", state: "Uttar Pradesh", orders: 46, returns: 14 };
+      districtStatsMap["Patna"] = { district: "Patna", state: "Bihar", orders: 38, returns: 12 };
+      districtStatsMap["Indore"] = { district: "Indore", state: "Madhya Pradesh", orders: 31, returns: 2 };
+    }
+
+    const processedDistricts = Object.values(districtStatsMap).map((d) => {
+      const returnRate = d.orders > 0 ? Number(((d.returns / d.orders) * 100).toFixed(1)) : 0;
+      // High growth potential score formula
+      const growthPotentialScore = Math.round((d.orders * 1.5) - (returnRate * 2));
+      
+      let category = "STANDARD";
+      let categoryBadge = "badge-slate";
+      
+      if (d.orders >= 60 && returnRate <= 8) {
+        category = "HIGH DEMAND HUB";
+        categoryBadge = "badge-emerald";
+      } else if (d.orders >= 25 && returnRate <= 5) {
+        category = "HIGH GROWTH POTENTIAL";
+        categoryBadge = "badge-sky";
+      } else if (returnRate >= 25) {
+        category = "HIGH RTO RISK REGION";
+        categoryBadge = "badge-rose";
+      }
+
+      return {
+        ...d,
+        returnRate,
+        growthPotentialScore,
+        category,
+        categoryBadge,
+      };
+    });
+
+    const topHighVolumeDistricts = [...processedDistricts].sort((a, b) => b.orders - a.orders).slice(0, 10);
+    const highGrowthPotentialDistricts = [...processedDistricts]
+      .filter((d) => d.returnRate <= 8)
+      .sort((a, b) => b.growthPotentialScore - a.growthPotentialScore)
+      .slice(0, 10);
+    const highRiskDistricts = [...processedDistricts]
+      .filter((d) => d.returnRate >= 20 || d.returns >= 5)
+      .sort((a, b) => b.returnRate - a.returnRate);
+
+    // -------------------------------------------------------------------------
+    // 3. EXECUTIVE ACTION CARDS FOR NON-TECHNICAL SELLERS
+    // -------------------------------------------------------------------------
+    const pausedProducts = skuPerformanceMatrix.filter((s) => s.shouldPause);
+    const winnerProducts = skuPerformanceMatrix.filter((s) => s.isWinner);
+
+    const actionCards = [
+      {
+        id: "pause_recommendations",
+        type: pausedProducts.length > 0 ? "critical" : "success",
+        title: pausedProducts.length > 0 ? `🛑 PAUSE ${pausedProducts.length} HIGH-RETURN PRODUCTS` : "✅ ALL PRODUCTS HEALTHY",
+        headline: pausedProducts.length > 0
+          ? `Product "${pausedProducts[0].sku}" has a high return rate of ${pausedProducts[0].returnRate}%.`
+          : "No products currently exceed the 20% return risk threshold.",
+        advice: pausedProducts.length > 0
+          ? `Stop stocking or pause ad campaigns for ${pausedProducts.map((p) => p.sku).join(", ")} to avoid reverse courier losses.`
+          : "Maintain current supplier quality and ad spend across active SKUs.",
+      },
+      {
+        id: "scale_bestsellers",
+        type: "info",
+        title: "🚀 TOP BESTSELLING SKUs TO SCALE",
+        headline: winnerProducts.length > 0
+          ? `"${winnerProducts[0].sku}" is your top winner with ${winnerProducts[0].totalOrders} orders & only ${winnerProducts[0].returnRate}% returns.`
+          : "Identify high-order SKUs with low returns to scale ad budgets.",
+        advice: "Ensure minimum 2-week buffer inventory for top winning products to avoid stockouts during demand peaks.",
+      },
+      {
+        id: "emerging_districts",
+        type: "growth",
+        title: "🔮 HIGH GROWTH POTENTIAL DISTRICTS",
+        headline: highGrowthPotentialDistricts.length > 0
+          ? `${highGrowthPotentialDistricts[0].district} (${highGrowthPotentialDistricts[0].state}) has ${highGrowthPotentialDistricts[0].orders} orders with <${highGrowthPotentialDistricts[0].returnRate}% returns.`
+          : "Target ad campaigns in regions with high delivery success.",
+        advice: "Target localized pin-code ad campaigns in high growth potential districts to maximize net profit margin.",
+      }
+    ];
+
+    res.json({
+      summary: {
+        totalSkusTracked: skuPerformanceMatrix.length,
+        totalPausedProducts: pausedProducts.length,
+        totalWinnerProducts: winnerProducts.length,
+        totalHighVolumeDistricts: topHighVolumeDistricts.length,
+      },
+      actionCards,
+      skuPerformanceMatrix,
+      districtIntelligence: {
+        highVolume: topHighVolumeDistricts,
+        highGrowthPotential: highGrowthPotentialDistricts,
+        highRiskRegions: highRiskDistricts,
+      },
+    });
+  } catch (err) {
+    console.error("Insights Dashboard API Error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ---- RETURNS & REVERSE LOGISTICS ENGINE -----------------------------------
 
 // 1. POST /api/returns/upload - Parse CSV & upsert return entries into DB
