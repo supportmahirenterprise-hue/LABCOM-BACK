@@ -961,8 +961,33 @@ app.get("/api/customer-analysis", async (req, res) => {
 
     const db = await getDb();
     const customersCol = db.collection("customers");
+    const returnsCol1 = db.collection("return_entries");
+    const returnsCol2 = db.collection("returns");
 
-    let allCustomers = await customersCol.find({}).sort({ orderCount: -1, updatedAt: -1 }).toArray();
+    const [allCustomers, returnEntries1, returnEntries2] = await Promise.all([
+      customersCol.find({}).sort({ orderCount: -1, updatedAt: -1 }).toArray(),
+      returnsCol1.find({}).toArray(),
+      returnsCol2.find({}).toArray(),
+    ]);
+
+    const returnLookup = {};
+    [...returnEntries1, ...returnEntries2].forEach((r) => {
+      const keys = [
+        r.subOrderNo,
+        r.orderNo,
+        r.awbNumber,
+        r.courierAwb,
+        r.subOrderId,
+        r.trackingNo,
+      ].filter(Boolean);
+
+      keys.forEach((k) => {
+        const norm = String(k).trim().toLowerCase();
+        if (norm) {
+          returnLookup[norm] = r;
+        }
+      });
+    });
 
     // Attach detected district to all customer objects
     allCustomers.forEach((c) => {
@@ -1063,6 +1088,35 @@ app.get("/api/customer-analysis", async (req, res) => {
     const formattedList = customers
       .map((c) => {
         const cnt = c.orderCount || c.orders?.length || 1;
+        const enrichedOrders = (c.orders || []).map((o) => {
+          const oNo = String(o.orderNo || "").trim().toLowerCase();
+          const subId = String(o.subOrderId || o.subOrderNo || "").trim().toLowerCase();
+          const awb = String(o.awbNumber || o.courierAwb || "").trim().toLowerCase();
+
+          const retRecord = returnLookup[subId] || returnLookup[oNo] || (awb ? returnLookup[awb] : null);
+
+          const hasReturn = Boolean(retRecord || o.hasReturn || o.returnStatus || o.returnType);
+          const rawType = retRecord?.returnType || retRecord?.subType || o.returnType || "";
+          const isRto = /rto|courier/i.test(rawType);
+          const isPostDeliveryReturn = hasReturn && !isRto;
+
+          return {
+            ...o,
+            hasReturn,
+            isPostDeliveryReturn,
+            returnType: isPostDeliveryReturn
+              ? "Customer Return (Post-Delivery)"
+              : hasReturn
+              ? "Courier RTO"
+              : null,
+            returnReason: retRecord?.returnReason || retRecord?.detailedReturnReason || o.returnReason || "N/A",
+            returnDate: retRecord?.returnCreatedDate || retRecord?.deliveredDate || retRecord?.createdAt || o.returnDate || "",
+          };
+        });
+
+        const postDeliveryReturnCount = enrichedOrders.filter((o) => o.isPostDeliveryReturn).length;
+        const rtoCount = enrichedOrders.filter((o) => o.hasReturn && !o.isPostDeliveryReturn).length;
+
         return {
           id: c._id.toString(),
           name: c.name || "Customer",
@@ -1075,7 +1129,9 @@ app.get("/api/customer-analysis", async (req, res) => {
           firstOrderDate: c.firstOrderDate || "",
           lastOrderDate: c.lastOrderDate || "",
           ordersCountText: cnt > 1 ? `${cnt} Orders` : "1 Order",
-          orders: c.orders || [],
+          postDeliveryReturnCount,
+          rtoCount,
+          orders: enrichedOrders,
         };
       })
       .sort((a, b) => b.orderCount - a.orderCount);
@@ -1113,6 +1169,48 @@ app.get("/api/customer-analysis/history", async (req, res) => {
     const customer = await customersCol.findOne({ _id: new ObjectId(id) });
     if (!customer) return res.status(404).json({ error: "Customer not found" });
 
+    const returnsCol1 = db.collection("return_entries");
+    const returnsCol2 = db.collection("returns");
+    const [returnEntries1, returnEntries2] = await Promise.all([
+      returnsCol1.find({}).toArray(),
+      returnsCol2.find({}).toArray(),
+    ]);
+
+    const returnLookup = {};
+    [...returnEntries1, ...returnEntries2].forEach((r) => {
+      const keys = [r.subOrderNo, r.orderNo, r.awbNumber, r.courierAwb, r.subOrderId, r.trackingNo].filter(Boolean);
+      keys.forEach((k) => {
+        const norm = String(k).trim().toLowerCase();
+        if (norm) returnLookup[norm] = r;
+      });
+    });
+
+    const enrichedOrders = (customer.orders || []).map((o) => {
+      const oNo = String(o.orderNo || "").trim().toLowerCase();
+      const subId = String(o.subOrderId || o.subOrderNo || "").trim().toLowerCase();
+      const awb = String(o.awbNumber || o.courierAwb || "").trim().toLowerCase();
+
+      const retRecord = returnLookup[subId] || returnLookup[oNo] || (awb ? returnLookup[awb] : null);
+
+      const hasReturn = Boolean(retRecord || o.hasReturn || o.returnStatus || o.returnType);
+      const rawType = retRecord?.returnType || retRecord?.subType || o.returnType || "";
+      const isRto = /rto|courier/i.test(rawType);
+      const isPostDeliveryReturn = hasReturn && !isRto;
+
+      return {
+        ...o,
+        hasReturn,
+        isPostDeliveryReturn,
+        returnType: isPostDeliveryReturn
+          ? "Customer Return (Post-Delivery)"
+          : hasReturn
+          ? "Courier RTO"
+          : null,
+        returnReason: retRecord?.returnReason || retRecord?.detailedReturnReason || o.returnReason || "N/A",
+        returnDate: retRecord?.returnCreatedDate || retRecord?.deliveredDate || retRecord?.createdAt || o.returnDate || "",
+      };
+    });
+
     res.json({
       id: customer._id.toString(),
       name: customer.name,
@@ -1120,7 +1218,7 @@ app.get("/api/customer-analysis/history", async (req, res) => {
       address: customer.address || "N/A",
       state: customer.state || "India",
       orderCount: customer.orderCount || 1,
-      orders: customer.orders || [],
+      orders: enrichedOrders,
     });
   } catch (err) {
     console.error("Customer History API Error:", err);
