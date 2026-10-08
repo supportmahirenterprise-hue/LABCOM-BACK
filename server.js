@@ -46,6 +46,49 @@ function initCanvasFonts() {
 }
 initCanvasFonts();
 
+// ---- HIGH-PERFORMANCE IN-MEMORY TTL CACHE & INDEXING ENGINE --------------
+const apiCache = new Map();
+const DEFAULT_TTL_MS = 15000; // 15 seconds TTL for rapid sub-5ms responses
+
+function getCachedData(key) {
+  const cached = apiCache.get(key);
+  if (cached && Date.now() < cached.expiresAt) {
+    return cached.data;
+  }
+  if (cached) {
+    apiCache.delete(key);
+  }
+  return null;
+}
+
+function setCachedData(key, data, ttlMs = DEFAULT_TTL_MS) {
+  apiCache.set(key, {
+    data,
+    expiresAt: Date.now() + ttlMs,
+  });
+}
+
+function clearAllApiCache() {
+  apiCache.clear();
+}
+
+async function ensureDatabaseIndexes() {
+  try {
+    const db = await getDb();
+    await Promise.all([
+      db.collection("customers").createIndex({ state: 1, district: 1 }),
+      db.collection("customers").createIndex({ orderCount: -1 }),
+      db.collection("return_entries").createIndex({ sku: 1, returnType: 1 }),
+      db.collection("return_entries").createIndex({ userEmail: 1 }),
+      db.collection("qr_scans").createIndex({ sellerEmail: 1, date: -1 }),
+    ]);
+    console.log("⚡ MongoDB indexes verified for ultra-fast query execution.");
+  } catch (err) {
+    console.warn("MongoDB Index Creation Warning:", err.message);
+  }
+}
+ensureDatabaseIndexes().catch(() => {});
+
 const app = express();
 app.use(
   cors({
@@ -905,12 +948,19 @@ function detectDistrict(address = "", state = "") {
 // GET /api/customer-analysis
 app.get("/api/customer-analysis", async (req, res) => {
   try {
-    const db = await getDb();
-    const customersCol = db.collection("customers");
     const search = (req.query.search || "").trim().toLowerCase();
     const repeatOnly = req.query.repeatOnly === "true";
     const selectedState = (req.query.state || "").trim();
     const selectedDistrict = (req.query.district || "").trim();
+
+    const cacheKey = `cust_analysis_${search}_${repeatOnly}_${selectedState}_${selectedDistrict}`;
+    const cached = getCachedData(cacheKey);
+    if (cached) {
+      return res.json(cached);
+    }
+
+    const db = await getDb();
+    const customersCol = db.collection("customers");
 
     let allCustomers = await customersCol.find({}).sort({ orderCount: -1, updatedAt: -1 }).toArray();
 
@@ -983,7 +1033,25 @@ app.get("/api/customer-analysis", async (req, res) => {
         const addrMatch = (c.address || "").toLowerCase().includes(search);
         const stateMatch = (c.state || "").toLowerCase().includes(search);
         const distMatch = (c.district || "").toLowerCase().includes(search);
-        const orderMatch = c.orders?.some((o) => (o.orderNo || "").toLowerCase().includes(search));
+        const cleanSearch = search.replace(/_\d+$/, "");
+
+        const orderMatch = c.orders?.some((o) => {
+          const oNo = (o.orderNo || "").toLowerCase();
+          const subId = (o.subOrderId || o.subOrderNo || "").toLowerCase();
+          const skuStr = (o.sku || "").toLowerCase();
+          const invStr = (o.invoiceNo || "").toLowerCase();
+          const awbStr = (o.awbNumber || o.courierAwb || "").toLowerCase();
+
+          return (
+            oNo.includes(search) ||
+            oNo.includes(cleanSearch) ||
+            subId.includes(search) ||
+            subId.includes(cleanSearch) ||
+            skuStr.includes(search) ||
+            invStr.includes(search) ||
+            awbStr.includes(search)
+          );
+        });
         return nameMatch || mobMatch || addrMatch || stateMatch || distMatch || orderMatch;
       });
     }
@@ -1012,7 +1080,7 @@ app.get("/api/customer-analysis", async (req, res) => {
       })
       .sort((a, b) => b.orderCount - a.orderCount);
 
-    res.json({
+    const responseObj = {
       summary: {
         totalCustomers,
         repeatCustomersCount,
@@ -1024,7 +1092,10 @@ app.get("/api/customer-analysis", async (req, res) => {
         allDistrictsWithCounts: allDistrictsWithCounts || [],
       },
       customers: formattedList,
-    });
+    };
+
+    setCachedData(cacheKey, responseObj, 15000);
+    res.json(responseObj);
   } catch (err) {
     console.error("Customer Analysis API Error:", err);
     res.status(500).json({ error: err.message });
@@ -1060,6 +1131,12 @@ app.get("/api/customer-analysis/history", async (req, res) => {
 // GET /api/insights/dashboard - Deep Regional Demand, SKU Matrix & Pause Product Recommendations
 app.get("/api/insights/dashboard", async (req, res) => {
   try {
+    const cacheKey = "insights_dashboard";
+    const cached = getCachedData(cacheKey);
+    if (cached) {
+      return res.json(cached);
+    }
+
     const db = await getDb();
     const customersCol = db.collection("customers");
     const returnsCol = db.collection("return_entries");
@@ -1309,7 +1386,7 @@ app.get("/api/insights/dashboard", async (req, res) => {
       }
     ];
 
-    res.json({
+    const responseObj = {
       summary: {
         totalSkusTracked: skuPerformanceMatrix.length,
         totalPausedProducts: pausedProducts.length,
@@ -1323,7 +1400,10 @@ app.get("/api/insights/dashboard", async (req, res) => {
         highGrowthPotential: highGrowthPotentialDistricts,
         highRiskRegions: highRiskDistricts,
       },
-    });
+    };
+
+    setCachedData("insights_dashboard", responseObj, 15000);
+    res.json(responseObj);
   } catch (err) {
     console.error("Insights Dashboard API Error:", err);
     res.status(500).json({ error: err.message });
@@ -1476,6 +1556,8 @@ app.post("/api/returns/upload", upload.single("file"), async (req, res) => {
     if (bulkOps.length > 0) {
       await returnsCol.bulkWrite(bulkOps);
     }
+
+    clearAllApiCache();
 
     res.json({
       success: true,
