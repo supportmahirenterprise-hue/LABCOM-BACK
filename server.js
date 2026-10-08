@@ -2269,21 +2269,32 @@ app.post("/api/generate", upload.single("pdf"), async (req, res) => {
     const pageCount = copiedPages.length;
     const filename = isSample ? `1_${dateStr}_sample_test_page_1.pdf` : `${pageCount}_${dateStr}_stamped.pdf`;
 
-    // Automatically Dispatch Stamped PDF (PDF format) & Summary Report (PNG Image format) to WhatsApp (918140148878)
+    // Automatically Dispatch Stamped PDF (PDF format) & Summary Report (PNG Image format) to WhatsApp
     const skipWhatsApp = req.body?.skipWhatsApp === "true";
     if (!skipWhatsApp) {
       (async () => {
         try {
-          const receiverNumber = req.body?.whatsappNumber || DEFAULT_RECEIVER_NUMBER;
+          const userEmail = getUserEmail(req);
+          let userSettings = null;
+          if (userEmail) {
+            try {
+              const db = await getDb();
+              userSettings = await db.collection("user_settings").findOne({ email: userEmail });
+            } catch (e) {}
+          }
+
+          const pdfReceiver = req.body?.pdfReceiverNumber || req.body?.whatsappNumber || userSettings?.pdfReceiverNumber || userSettings?.waReceiverNumber || userSettings?.phone || DEFAULT_RECEIVER_NUMBER;
+          const imageReceiver = req.body?.imageReceiverNumber || req.body?.whatsappNumber || userSettings?.imageReceiverNumber || userSettings?.waReceiverNumber || userSettings?.phone || DEFAULT_RECEIVER_NUMBER;
+
           const stampedFileName = isSample ? `1_${dateStr}_sample_test_page_1.pdf` : `${pageCount}_${dateStr}_stamped.pdf`;
           const summaryFileName = isSample ? `1_${dateStr}_sample_summary.png` : `${pageCount}_${dateStr}_summary.png`;
 
           const sortedFields = (order || []).map((idx) => fields[idx] || {});
 
-          // 1. Send Stamped PDF as PDF format (data:application/pdf;base64,...) with exact filename (no text caption underneath)
+          // 1. Send Stamped PDF to pdfReceiver
           const pdfBase64 = `data:application/pdf;base64,${Buffer.from(outBytes).toString("base64")}`;
           await sendWhatsAppMedia({
-            number: receiverNumber,
+            number: pdfReceiver,
             fileData: pdfBase64,
             fileName: stampedFileName,
             filename: stampedFileName,
@@ -2295,12 +2306,12 @@ app.post("/api/generate", upload.single("pdf"), async (req, res) => {
           // 1 second pause between media dispatches for gateway stability
           await new Promise((resolve) => setTimeout(resolve, 1000));
 
-          // 2. Generate Summary PNG Image and Send via WhatsApp (data:image/png;base64,...) with exact filename
+          // 2. Generate Summary PNG Image and Send to imageReceiver
           const dataForSummary = sortedFields.length > 0 ? sortedFields : fields;
           if (dataForSummary && dataForSummary.length > 0) {
             const summaryPngBase64 = generateSummaryCanvasImage(dataForSummary, req.file?.originalname || "labels.pdf");
             await sendWhatsAppMedia({
-              number: receiverNumber,
+              number: imageReceiver,
               fileData: summaryPngBase64,
               fileName: summaryFileName,
               filename: summaryFileName,
@@ -2328,7 +2339,18 @@ app.post("/api/generate", upload.single("pdf"), async (req, res) => {
 app.post("/api/whatsapp/dispatch-final", upload.single("pdf"), async (req, res) => {
   req.setTimeout(600000);
   try {
-    const receiverNumber = req.body?.whatsappNumber || DEFAULT_RECEIVER_NUMBER;
+    const userEmail = getUserEmail(req);
+    let userSettings = null;
+    if (userEmail) {
+      try {
+        const db = await getDb();
+        userSettings = await db.collection("user_settings").findOne({ email: userEmail });
+      } catch (e) {}
+    }
+
+    const pdfReceiver = req.body?.pdfReceiverNumber || req.body?.whatsappNumber || userSettings?.pdfReceiverNumber || userSettings?.waReceiverNumber || userSettings?.phone || DEFAULT_RECEIVER_NUMBER;
+    const imageReceiver = req.body?.imageReceiverNumber || req.body?.whatsappNumber || userSettings?.imageReceiverNumber || userSettings?.waReceiverNumber || userSettings?.phone || DEFAULT_RECEIVER_NUMBER;
+
     const fileName = req.body?.fileName || "labels.pdf";
     let pages = [];
     try {
@@ -2346,7 +2368,7 @@ app.post("/api/whatsapp/dispatch-final", upload.single("pdf"), async (req, res) 
     if (req.file && req.file.buffer && req.file.buffer.length > 0) {
       const pdfBase64 = `data:application/pdf;base64,${req.file.buffer.toString("base64")}`;
       await sendWhatsAppMedia({
-        number: receiverNumber,
+        number: pdfReceiver,
         fileData: pdfBase64,
         fileName: stampedFileName,
         filename: stampedFileName,
@@ -2360,7 +2382,7 @@ app.post("/api/whatsapp/dispatch-final", upload.single("pdf"), async (req, res) 
       await new Promise((r) => setTimeout(r, 1000));
       const summaryPngBase64 = generateSummaryCanvasImage(pages, fileName);
       await sendWhatsAppMedia({
-        number: receiverNumber,
+        number: imageReceiver,
         fileData: summaryPngBase64,
         fileName: summaryFileName,
         filename: summaryFileName,
@@ -2783,6 +2805,11 @@ app.post("/api/user/settings", async (req, res) => {
       sortBy,
       sortOrder,
       downloadSummary,
+      enableWhatsApp,
+      waApiKey,
+      waReceiverNumber,
+      pdfReceiverNumber,
+      imageReceiverNumber,
     } = req.body;
 
     const db = await getDb();
@@ -2807,6 +2834,11 @@ app.post("/api/user/settings", async (req, res) => {
           sortBy: sortBy !== undefined ? sortBy : "sku",
           sortOrder: sortOrder !== undefined ? sortOrder : "asc",
           downloadSummary: downloadSummary !== undefined ? downloadSummary : false,
+          enableWhatsApp: enableWhatsApp !== undefined ? enableWhatsApp : true,
+          waApiKey: waApiKey !== undefined ? waApiKey : "wa_c6854599bd4b7a54cad78edbdd6ace51",
+          waReceiverNumber: waReceiverNumber !== undefined ? waReceiverNumber : "918140148878",
+          pdfReceiverNumber: pdfReceiverNumber !== undefined ? pdfReceiverNumber : (waReceiverNumber || phone || "918140148878"),
+          imageReceiverNumber: imageReceiverNumber !== undefined ? imageReceiverNumber : (waReceiverNumber || phone || "918140148878"),
           updatedAt: new Date(),
         },
       },
