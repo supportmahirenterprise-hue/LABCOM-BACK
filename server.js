@@ -198,114 +198,183 @@ function drawShopIconCanvas(ctx, x, y, size) {
   ctx.restore();
 }
 
-async function renderStampBadgeCanvasBackend(storeNameStr, qrContentStr, detailTextStr, qrSizeVal, fontSizeVal) {
-  const scale = 4; // 300+ High DPI
+/**
+ * Robust word wrapper for Canvas text rendering
+ */
+function wrapCanvasText(ctx, text, maxLineWidth) {
+  if (!text) return [];
+  const paragraphs = String(text).split("\n");
+  const lines = [];
+
+  for (const para of paragraphs) {
+    if (!para.trim()) {
+      continue;
+    }
+    const words = para.trim().split(/\s+/);
+    let curLine = "";
+
+    for (const word of words) {
+      const testLine = curLine ? `${curLine} ${word}` : word;
+      const testWidth = ctx.measureText(testLine).width;
+
+      if (testWidth > maxLineWidth && curLine) {
+        lines.push(curLine);
+        curLine = word;
+      } else {
+        curLine = testLine;
+      }
+    }
+    if (curLine) {
+      lines.push(curLine);
+    }
+  }
+
+  return lines.length > 0 ? lines : [" "];
+}
+
+async function renderStampBadgeCanvasBackend(storeNameStr, qrContentStr, detailTextStr, qrSizeVal, fontSizeVal, maxAllowedWidthPt = 260) {
+  const scale = 4; // High DPI (300+ DPI for crisp thermal printing)
   const cleanStore = (storeNameStr || "STORE").trim().toUpperCase();
 
-  const tempCanvas = createCanvas(10, 10);
-  const tempCtx = tempCanvas.getContext("2d");
+  const maxTotalWidthPx = Math.round(maxAllowedWidthPt * scale);
 
-  const storeFontSizePx = Math.round(Math.max(12, fontSizeVal * 1.5) * scale);
-  const storeFontCss = `bold ${storeFontSizePx}px "Nirmala UI", "Segoe UI", Arial, sans-serif`;
-  tempCtx.font = storeFontCss;
-  const storeTextWidth = tempCtx.measureText(cleanStore).width;
+  // Setup measuring canvas
+  const measureCanvas = createCanvas(10, 10);
+  const mCtx = measureCanvas.getContext("2d");
 
-  const detailFontSizePx = Math.round(fontSizeVal * scale);
-  const detailFontCss = `bold ${detailFontSizePx}px "Nirmala UI", "Segoe UI", Arial, sans-serif`;
-  tempCtx.font = detailFontCss;
+  // Determine Store Font Size
+  let storeFontSizePt = Math.max(11, Math.min(14, fontSizeVal * 1.3));
+  let storeFontCss = `bold ${Math.round(storeFontSizePt * scale)}px "Nirmala UI", "Segoe UI", Arial, sans-serif`;
+  mCtx.font = storeFontCss;
+  let storeTextWidth = mCtx.measureText(cleanStore).width;
 
-  const rawLines = (detailTextStr || "Follow\nour page").split("\n");
-  let maxDetailLineWidth = 0;
-  rawLines.forEach((line) => {
-    const w = tempCtx.measureText(line).width;
-    if (w > maxDetailLineWidth) maxDetailLineWidth = w;
-  });
+  // Auto-shrink store name if it is very long (e.g. "MAHIR ENTERPRISE GUJARAT")
+  const maxStoreWidthPx = Math.round(85 * scale);
+  while (storeTextWidth > maxStoreWidthPx && storeFontSizePt > 8.5) {
+    storeFontSizePt -= 0.5;
+    storeFontCss = `bold ${Math.round(storeFontSizePt * scale)}px "Nirmala UI", "Segoe UI", Arial, sans-serif`;
+    mCtx.font = storeFontCss;
+    storeTextWidth = mCtx.measureText(cleanStore).width;
+  }
 
-  const padX = Math.round(16 * scale);
-  const padY = Math.round(10 * scale);
-  const iconSize = Math.round(Math.max(26, qrSizeVal * 0.48) * scale);
-  const iconTextGap = Math.round(12 * scale);
-  const dividerGap = Math.round(16 * scale);
-  const qrScaledSize = Math.round(Math.max(28, qrSizeVal * 0.52) * scale);
-  const qrTextGap = Math.round(12 * scale);
+  // Layout spacing
+  const padXPx = Math.round(10 * scale);
+  const padYPx = Math.round(6 * scale);
+  const iconSizePx = Math.round(22 * scale);
+  const iconTextGapPx = Math.round(8 * scale);
+  const dividerGapPx = Math.round(10 * scale);
+  const dividerWidthPx = Math.round(1.5 * scale);
+  const qrScaledSizePx = Math.round(Math.max(26, Math.min(34, qrSizeVal * 0.45)) * scale);
+  const qrTextGapPx = Math.round(8 * scale);
 
-  const leftSectionWidth = iconSize + iconTextGap + storeTextWidth;
-  const rightSectionWidth = qrScaledSize + qrTextGap + maxDetailLineWidth;
-  const totalWidth = padX + leftSectionWidth + dividerGap + Math.round(2 * scale) + dividerGap + rightSectionWidth + padX;
+  const leftSectionWidthPx = iconSizePx + iconTextGapPx + storeTextWidth;
 
-  const detailBlockHeight = rawLines.length * (detailFontSizePx * 1.25);
-  const contentHeight = Math.max(iconSize, qrScaledSize, detailBlockHeight, storeFontSizePx);
-  const totalHeight = padY + contentHeight + padY;
+  // Calculate available width for text column
+  const fixedWidthPx = padXPx + leftSectionWidthPx + dividerGapPx + dividerWidthPx + dividerGapPx + qrScaledSizePx + qrTextGapPx + padXPx;
+  const maxAvailableTextWidthPx = Math.max(Math.round(60 * scale), maxTotalWidthPx - fixedWidthPx);
 
-  const canvas = createCanvas(totalWidth, totalHeight);
+  // Auto-fit detail text
+  let detailFontSizePt = Math.max(7, Math.min(10, fontSizeVal));
+  let detailFontCss = `bold ${Math.round(detailFontSizePt * scale)}px "Nirmala UI", "Segoe UI", Arial, sans-serif`;
+  mCtx.font = detailFontCss;
+
+  let wrappedLines = wrapCanvasText(mCtx, detailTextStr || "Follow\nour page", maxAvailableTextWidthPx);
+
+  // If text creates more than 3 lines, shrink font size to fit cleanly
+  while (wrappedLines.length > 3 && detailFontSizePt > 6.5) {
+    detailFontSizePt -= 0.5;
+    detailFontCss = `bold ${Math.round(detailFontSizePt * scale)}px "Nirmala UI", "Segoe UI", Arial, sans-serif`;
+    mCtx.font = detailFontCss;
+    wrappedLines = wrapCanvasText(mCtx, detailTextStr || "Follow\nour page", maxAvailableTextWidthPx);
+  }
+
+  // Max line width
+  let maxDetailLineWidthPx = 0;
+  for (const line of wrappedLines) {
+    const w = mCtx.measureText(line).width;
+    if (w > maxDetailLineWidthPx) maxDetailLineWidthPx = w;
+  }
+
+  // Total dimensions
+  const totalWidthPx = padXPx + leftSectionWidthPx + dividerGapPx + dividerWidthPx + dividerGapPx + qrScaledSizePx + qrTextGapPx + maxDetailLineWidthPx + padXPx;
+
+  const detailFontSizePx = Math.round(detailFontSizePt * scale);
+  const textLineHeightPx = Math.round(detailFontSizePx * 1.25);
+  const totalTextHeightPx = wrappedLines.length * textLineHeightPx;
+  const contentHeightPx = Math.max(iconSizePx, qrScaledSizePx, totalTextHeightPx, Math.round(storeFontSizePt * scale));
+  const totalHeightPx = padYPx + contentHeightPx + padYPx;
+
+  // Draw on Canvas
+  const canvas = createCanvas(totalWidthPx, totalHeightPx);
   const ctx = canvas.getContext("2d");
 
   // 1. White Background with Rounded Outer Border (Exact Match)
-  const borderRadius = Math.round(12 * scale);
-  const borderWidth = Math.round(2.5 * scale);
+  const borderRadiusPx = Math.round(10 * scale);
+  const borderWidthPx = Math.round(2 * scale);
+
   ctx.fillStyle = "#FFFFFF";
   ctx.strokeStyle = "#000000";
-  ctx.lineWidth = borderWidth;
+  ctx.lineWidth = borderWidthPx;
 
   ctx.beginPath();
   if (ctx.roundRect) {
-    ctx.roundRect(borderWidth / 2, borderWidth / 2, totalWidth - borderWidth, totalHeight - borderWidth, borderRadius);
+    ctx.roundRect(borderWidthPx / 2, borderWidthPx / 2, totalWidthPx - borderWidthPx, totalHeightPx - borderWidthPx, borderRadiusPx);
   } else {
-    ctx.rect(borderWidth / 2, borderWidth / 2, totalWidth - borderWidth, totalHeight - borderWidth);
+    ctx.rect(borderWidthPx / 2, borderWidthPx / 2, totalWidthPx - borderWidthPx, totalHeightPx - borderWidthPx);
   }
   ctx.fill();
   ctx.stroke();
 
-  const centerY = totalHeight / 2;
+  const centerYPx = totalHeightPx / 2;
 
-  // 2. Storefront Icon
-  let curX = padX;
-  const iconY = centerY - iconSize / 2;
-  drawShopIconCanvas(ctx, curX, iconY, iconSize);
+  // 2. Draw Store Icon
+  let curXPx = padXPx;
+  const iconYPx = centerYPx - iconSizePx / 2;
+  drawShopIconCanvas(ctx, curXPx, iconYPx, iconSizePx);
 
-  // 3. Store Name (Bold Uppercase)
-  curX += iconSize + iconTextGap;
+  // 3. Draw Store Name
+  curXPx += iconSizePx + iconTextGapPx;
   ctx.font = storeFontCss;
   ctx.fillStyle = "#000000";
   ctx.textBaseline = "middle";
-  ctx.fillText(cleanStore, curX, centerY);
+  ctx.fillText(cleanStore, curXPx, centerYPx);
 
-  // 4. Vertical Divider Line
-  curX += storeTextWidth + dividerGap;
+  // 4. Draw Vertical Divider Line
+  curXPx += storeTextWidth + dividerGapPx;
   ctx.beginPath();
-  ctx.moveTo(curX, padY + Math.round(2 * scale));
-  ctx.lineTo(curX, totalHeight - padY - Math.round(2 * scale));
+  ctx.moveTo(curXPx, padYPx + Math.round(2 * scale));
+  ctx.lineTo(curXPx, totalHeightPx - padYPx - Math.round(2 * scale));
   ctx.strokeStyle = "#000000";
-  ctx.lineWidth = Math.round(2 * scale);
+  ctx.lineWidth = dividerWidthPx;
   ctx.stroke();
 
-  // 5. QR Code
-  curX += dividerGap;
+  // 5. Draw QR Code
+  curXPx += dividerGapPx;
   const qrPng = await QRCode.toBuffer(qrContentStr || "https://www.meesho.com", {
     margin: 0,
-    width: qrScaledSize,
+    width: qrScaledSizePx,
+    errorCorrectionLevel: "M",
   });
   const { loadImage } = require("@napi-rs/canvas");
   const qrImg = await loadImage(qrPng);
-  const qrYPos = centerY - qrScaledSize / 2;
-  ctx.drawImage(qrImg, curX, qrYPos, qrScaledSize, qrScaledSize);
+  const qrYPx = centerYPx - qrScaledSizePx / 2;
+  ctx.drawImage(qrImg, curXPx, qrYPx, qrScaledSizePx, qrScaledSizePx);
 
-  // 6. Text beside QR
-  curX += qrScaledSize + qrTextGap;
+  // 6. Draw Wrapped Detail Text beside QR
+  curXPx += qrScaledSizePx + qrTextGapPx;
   ctx.font = detailFontCss;
   ctx.fillStyle = "#000000";
   ctx.textBaseline = "top";
-  const textLineHeight = detailFontSizePx * 1.25;
-  const textStartY = centerY - (rawLines.length * textLineHeight) / 2;
+  const textStartYPx = centerYPx - (wrappedLines.length * textLineHeightPx) / 2;
 
-  rawLines.forEach((line, idx) => {
-    ctx.fillText(line, curX, textStartY + idx * textLineHeight);
+  wrappedLines.forEach((line, idx) => {
+    ctx.fillText(line, curXPx, textStartYPx + idx * textLineHeightPx);
   });
 
   return {
     pngBuffer: canvas.toBuffer("image/png"),
-    widthPt: totalWidth / scale,
-    heightPt: totalHeight / scale,
+    widthPt: totalWidthPx / scale,
+    heightPt: totalHeightPx / scale,
   };
 }
 
