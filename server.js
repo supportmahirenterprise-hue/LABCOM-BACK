@@ -2259,6 +2259,11 @@ app.post("/api/generate", upload.single("pdf"), async (req, res) => {
       qrY = "10",
       qrSize = "142",
       fontSize = "29",
+      cropMode = "none",
+      cropTop = "0",
+      cropBottom = "50",
+      cropLeft = "0",
+      cropRight = "0",
       overrides = "[]",
       sampleOnly = "false",
       startPage,
@@ -2400,6 +2405,34 @@ app.post("/api/generate", upload.single("pdf"), async (req, res) => {
 
     const outDoc = await PDFDocument.create();
     const copiedPages = await outDoc.copyPages(srcDoc, order);
+
+    // Apply PDF Page Crop Box if crop mode is selected
+    if (cropMode && cropMode !== "none") {
+      copiedPages.forEach((p) => {
+        const { width, height } = p.getSize();
+        let cropX = 0, cropY = 0, cropW = width, cropH = height;
+        if (cropMode === "top50") {
+          // Top 50% (shipping label part for Meesho/Flipkart A6 thermal printing)
+          cropY = height / 2;
+          cropH = height / 2;
+        } else if (cropMode === "bottom50") {
+          // Bottom 50% (invoice part)
+          cropY = 0;
+          cropH = height / 2;
+        } else if (cropMode === "custom") {
+          const topPct = (parseFloat(cropTop) || 0) / 100;
+          const botPct = (parseFloat(cropBottom) || 0) / 100;
+          const leftPct = (parseFloat(cropLeft) || 0) / 100;
+          const rightPct = (parseFloat(cropRight) || 0) / 100;
+          cropX = width * leftPct;
+          cropW = width * Math.max(0.05, 1 - leftPct - rightPct);
+          cropY = height * botPct;
+          cropH = height * Math.max(0.05, 1 - topPct - botPct);
+        }
+        p.setCropBox(cropX, cropY, cropW, cropH);
+      });
+    }
+
     copiedPages.forEach((p) => outDoc.addPage(p));
     const outBytes = await outDoc.save();
 
