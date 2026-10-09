@@ -2,7 +2,7 @@ const https = require("https");
 
 const WA_API_URL = process.env.WA_API_URL || "https://wa.lextrack.in/api/whatsapp/send-media";
 const WA_API_KEY = process.env.WA_API_KEY || "wa_c6854599bd4b7a54cad78edbdd6ace51";
-const DEFAULT_RECEIVER_NUMBER = process.env.WA_DEFAULT_RECEIVER || "918140148878";
+const DEFAULT_RECEIVER_NUMBER = process.env.WA_DEFAULT_RECEIVER || "919664720473";
 
 function sendWhatsAppMedia({
   number = DEFAULT_RECEIVER_NUMBER,
