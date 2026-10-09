@@ -3201,9 +3201,15 @@ app.post("/api/history", async (req, res) => {
     const email = getUserEmail(req);
     if (!email) return res.status(401).json({ error: "Unauthorized / Missing user email" });
 
-    const { fileName, pageCount, isSample, sortBy, sortOrder, enableQr, qrText } = req.body;
+    const { fileName, pageCount, isSample, sortBy, sortOrder, enableQr, qrText, pages } = req.body;
 
     const db = await getDb();
+
+    // Also upsert each order/customer from pages array into DB (async, non-blocking)
+    if (!isSample && Array.isArray(pages) && pages.length > 0) {
+      saveCustomerOrders(pages, email).catch((e) => console.error("History-triggered customer save error:", e));
+    }
+
     await db.collection("batch_history").insertOne({
       email,
       fileName: fileName || "Untitled_Batch.pdf",
