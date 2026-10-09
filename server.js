@@ -1625,12 +1625,15 @@ app.get("/api/insights/dashboard", async (req, res) => {
       const netDeliveredOrders = Math.max(0, totalOrders - totalReturns);
 
       const returnRate = totalOrders > 0 ? Number(((totalReturns / totalOrders) * 100).toFixed(1)) : 0;
+      const customerReturnRate = totalOrders > 0 ? Number(((customerReturnCount / totalOrders) * 100).toFixed(1)) : 0;
       const rtoRate = totalOrders > 0 ? Number(((rtoCount / totalOrders) * 100).toFixed(1)) : 0;
 
-      // STRICT Seller Decision Rule Engine (Return Rate > 10% -> PAUSE PRODUCT)
-      const shouldPause = returnRate > 10 || (totalReturns >= 3 && returnRate >= 10);
-      const isWinner = totalOrders >= 5 && returnRate <= 10 && !shouldPause;
-      const isHighRTO = rtoRate >= 10 && !shouldPause;
+      // Realistic E-Commerce Decision Engine (Indian Marketplace & Meesho Benchmarks)
+      // 1. Critical Pause: Customer return rate >= 20% (quality/sizing issue) with at least 5 returns, OR combined return rate >= 45% (with min 8 returns)
+      const shouldPause = (customerReturnRate >= 20 && customerReturnCount >= 5) || (returnRate >= 45 && totalReturns >= 8);
+      const isHighCustomerReturn = !shouldPause && (customerReturnRate >= 15 && customerReturnCount >= 3);
+      const isHighRTO = !shouldPause && !isHighCustomerReturn && (rtoRate >= 20 && rtoCount >= 4);
+      const isWinner = !shouldPause && totalOrders >= 15 && customerReturnRate <= 10 && returnRate <= 25;
 
       let actionBadge = "STABLE";
       let badgeStyle = "badge-slate";
@@ -1639,15 +1642,19 @@ app.get("/api/insights/dashboard", async (req, res) => {
       if (shouldPause) {
         actionBadge = "PAUSE PRODUCT";
         badgeStyle = "badge-rose";
-        adviceText = `🛑 Return rate exceeds 10% limit (${returnRate}% with ${totalReturns} returns). Pause ads & stop production immediately to prevent losses.`;
+        adviceText = `🛑 Critical return rate (${returnRate}% total: ${customerReturnCount} customer returns, ${rtoCount} courier RTOs). Pause ad campaigns and fix manufacturing/sizing to prevent losses.`;
+      } else if (isHighCustomerReturn) {
+        actionBadge = "HIGH CUST. RETURN";
+        badgeStyle = "badge-rose";
+        adviceText = `⚠️ High customer return rate (${customerReturnRate}% with ${customerReturnCount} returns). Review fabric quality, images, and sizing chart.`;
       } else if (isHighRTO) {
-        actionBadge = "HIGH RTO RISK";
+        actionBadge = "HIGH COURIER RTO";
         badgeStyle = "badge-amber";
-        adviceText = `⚠️ High courier undelivered RTO rate (${rtoRate}%). Verify customer phone number via WhatsApp before shipping.`;
+        adviceText = `⚠️ High courier undelivered RTO rate (${rtoRate}% with ${rtoCount} RTOs). Verify buyer address & WhatsApp before dispatch.`;
       } else if (isWinner) {
-        actionBadge = "HIGH DEMAND WINNER";
+        actionBadge = "TOP WINNER";
         badgeStyle = "badge-emerald";
-        adviceText = `🚀 Top seller! High net dispatches (${netDeliveredOrders} delivered) with safe return rate (${returnRate}%). Scale ad budget.`;
+        adviceText = `🚀 Top seller! Strong net dispatches (${netDeliveredOrders} delivered) with healthy customer return rate (${customerReturnRate}%). Scale ad budget.`;
       }
 
       return {
@@ -1658,8 +1665,11 @@ app.get("/api/insights/dashboard", async (req, res) => {
         customerReturnCount,
         netDeliveredOrders,
         returnRate,
+        customerReturnRate,
         rtoRate,
         shouldPause,
+        isHighCustomerReturn,
+        isHighRTO,
         isWinner,
         actionBadge,
         badgeStyle,
@@ -1674,8 +1684,8 @@ app.get("/api/insights/dashboard", async (req, res) => {
       if (b.netDeliveredOrders !== a.netDeliveredOrders) {
         return b.netDeliveredOrders - a.netDeliveredOrders;
       }
-      // 3. Fallback to lowest return rate
-      return a.returnRate - b.returnRate;
+      // 3. Fallback to lowest customer return rate
+      return a.customerReturnRate - b.customerReturnRate;
     });
 
     // -------------------------------------------------------------------------
@@ -1771,20 +1781,20 @@ app.get("/api/insights/dashboard", async (req, res) => {
       {
         id: "pause_recommendations",
         type: pausedProducts.length > 0 ? "critical" : "success",
-        title: pausedProducts.length > 0 ? `🛑 PAUSE ${pausedProducts.length} HIGH-RETURN PRODUCTS` : "✅ ALL PRODUCTS HEALTHY",
+        title: pausedProducts.length > 0 ? `🛑 PAUSE ${pausedProducts.length} CRITICAL-RETURN PRODUCTS` : "✅ ALL ACTIVE SKUs HEALTHY",
         headline: pausedProducts.length > 0
-          ? `Product "${pausedProducts[0].sku}" has a high return rate of ${pausedProducts[0].returnRate}%.`
-          : "No products currently exceed the 20% return risk threshold.",
+          ? `Product "${pausedProducts[0].sku}" has a high return rate of ${pausedProducts[0].returnRate}% (${pausedProducts[0].customerReturnCount} customer returns).`
+          : "No products currently exceed critical return thresholds.",
         advice: pausedProducts.length > 0
-          ? `Stop stocking or pause ad campaigns for ${pausedProducts.map((p) => p.sku).join(", ")} to avoid reverse courier losses.`
-          : "Maintain current supplier quality and ad spend across active SKUs.",
+          ? `Stop stocking or pause ad campaigns for ${pausedProducts.map((p) => p.sku).join(", ")} to avoid reverse logistics losses.`
+          : "Maintain current supplier quality and active catalog inventory levels.",
       },
       {
         id: "scale_bestsellers",
         type: "info",
         title: "🚀 TOP BESTSELLING SKUs TO SCALE",
         headline: winnerProducts.length > 0
-          ? `"${winnerProducts[0].sku}" is your top winner with ${winnerProducts[0].totalOrders} orders & only ${winnerProducts[0].returnRate}% returns.`
+          ? `"${winnerProducts[0].sku}" is your top winner with ${winnerProducts[0].totalOrders} orders & only ${winnerProducts[0].customerReturnRate}% customer returns.`
           : "Identify high-order SKUs with low returns to scale ad budgets.",
         advice: "Ensure minimum 2-week buffer inventory for top winning products to avoid stockouts during demand peaks.",
       },
