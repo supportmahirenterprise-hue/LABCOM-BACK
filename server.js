@@ -2264,6 +2264,8 @@ app.post("/api/generate", upload.single("pdf"), async (req, res) => {
       cropBottom = "50",
       cropLeft = "0",
       cropRight = "0",
+      stampStyle = "badge",
+      storeName = "VISHAL STORE",
       overrides = "[]",
       sampleOnly = "false",
       startPage,
@@ -2306,10 +2308,14 @@ app.post("/api/generate", upload.single("pdf"), async (req, res) => {
 
     if (shouldStampQr) {
       const font = await srcDoc.embedFont(StandardFonts.TimesRomanItalic);
+      const boldFont = await srcDoc.embedFont(StandardFonts.HelveticaBold);
       const x = parseFloat(qrX) || 0;
       const y = parseFloat(qrY) || 0;
       const size = parseFloat(qrSize) || 90;
       const fSize = parseFloat(fontSize) || 8;
+
+      const isBadgeMode = stampStyle === "badge";
+      const cleanStoreName = (storeName || "STORE").trim().toUpperCase();
 
       const qrImageCache = new Map();
       const unicodeImageCache = new Map();
@@ -2326,13 +2332,57 @@ app.post("/api/generate", upload.single("pdf"), async (req, res) => {
           qrImage = await srcDoc.embedPng(qrPng);
           qrImageCache.set(qrContent, qrImage);
         }
-        page.drawImage(qrImage, { x, y, width: size, height: size });
+
+        let actualQrX = x;
+        let actualTextX = x + size + 10;
+
+        if (isBadgeMode) {
+          const storeWidth = boldFont.widthOfTextAtSize(cleanStoreName, Math.max(9, fSize * 0.9));
+          const boxHeight = Math.max(size + 10, fSize * 2.2 + 14);
+          const detailFilledCalc = fillTemplate(detailText, data);
+          const calcLines = wrapText(detailFilledCalc, 200, font, fSize);
+          const textMaxWidthCalc = Math.max(60, calcLines.reduce((m, l) => Math.max(m, font.widthOfTextAtSize(l, fSize)), 0));
+          const boxWidth = 14 + storeWidth + 12 + 1 + 10 + size + 8 + textMaxWidthCalc + 12;
+
+          // 1. Draw Pill/Badge Box Frame
+          page.drawRectangle({
+            x: x - 4,
+            y: y - 4,
+            width: boxWidth,
+            height: boxHeight,
+            color: rgb(1, 1, 1),
+            borderColor: rgb(0, 0, 0),
+            borderWidth: 1.5,
+          });
+
+          // 2. Draw Store Name Text on left
+          page.drawText(cleanStoreName, {
+            x: x + 6,
+            y: y + (boxHeight / 2) - (fSize * 0.45),
+            size: Math.max(9, fSize * 0.9),
+            font: boldFont,
+            color: rgb(0, 0, 0),
+          });
+
+          // 3. Draw Vertical Divider Line
+          const divX = x + 6 + storeWidth + 10;
+          page.drawLine({
+            start: { x: divX, y: y - 1 },
+            end: { x: divX, y: y + boxHeight - 7 },
+            thickness: 1.2,
+            color: rgb(0, 0, 0),
+          });
+
+          actualQrX = divX + 10;
+          actualTextX = actualQrX + size + 8;
+        }
+
+        page.drawImage(qrImage, { x: actualQrX, y, width: size, height: size });
 
         const detailFilled = fillTemplate(detailText, data);
         if (detailFilled.trim()) {
           const pageWidth = page.getWidth();
-          const textX = x + size + 10;
-          const maxWidth = Math.max(30, pageWidth - textX - 15);
+          const maxWidth = Math.max(30, pageWidth - actualTextX - 15);
           const lines = wrapText(detailFilled, maxWidth, font, fSize);
 
           const lineHeight = fSize + 3;
@@ -2350,7 +2400,7 @@ app.post("/api/generate", upload.single("pdf"), async (req, res) => {
                   page,
                   srcDoc,
                   cleanLine,
-                  textX,
+                  actualTextX,
                   textY,
                   fSize,
                   font,
