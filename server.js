@@ -2234,19 +2234,15 @@ app.post("/api/preview", upload.single("pdf"), async (req, res) => {
   }
 });
 
-// 2. Upload PDF + config, stamp QR/details, reorder pages, return processed PDF
-app.post("/api/generate", upload.single("pdf"), async (req, res) => {
-  req.setTimeout(1800000); // 30 minutes timeout for large PDFs
-  res.setTimeout(1800000);
-  try {
-    if (!req.file || !req.file.buffer || req.file.buffer.length === 0) {
-      return res.status(400).json({ error: "PDF file is required and cannot be empty. Please select a valid PDF file." });
-    }
-
-    const header = req.file.buffer.slice(0, 5).toString("utf-8");
-    if (!header.includes("%PDF")) {
-      return res.status(400).json({ error: "Invalid file format. The uploaded file is not a valid PDF document." });
-    }
+// 2. /api/generate (PDF generation is now handled 100% Client-Side in browser for instant speed)
+app.post("/api/generate", (req, res) => {
+  res.status(200).json({
+    message: "PDF generation is now handled 100% client-side in browser memory for instant speed.",
+    isClientSide: true,
+  });
+});
+/*
+app.post("/api/generate_deprecated", upload.single("pdf"), async (req, res) => {
 
     const {
       enableQr = "true",
@@ -2556,6 +2552,7 @@ app.post("/api/generate", upload.single("pdf"), async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+*/
 
 // Endpoint to dispatch final merged PDF & final summary PNG image to WhatsApp
 app.post("/api/whatsapp/dispatch-final", upload.single("pdf"), async (req, res) => {
