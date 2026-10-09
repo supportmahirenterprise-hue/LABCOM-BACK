@@ -81,6 +81,8 @@ async function ensureDatabaseIndexes() {
       db.collection("return_entries").createIndex({ sku: 1, returnType: 1 }),
       db.collection("return_entries").createIndex({ userEmail: 1 }),
       db.collection("qr_scans").createIndex({ sellerEmail: 1, date: -1 }),
+      db.collection("contact_inquiries").createIndex({ email: 1, createdAt: -1 }),
+      db.collection("contact_inquiries").createIndex({ referenceId: 1 }),
     ]);
     console.log("⚡ MongoDB indexes verified for ultra-fast query execution.");
   } catch (err) {
@@ -3546,6 +3548,70 @@ app.get("/r/:code", async (req, res) => {
   } catch (err) {
     console.error("QR Redirect Error:", err);
     res.redirect(302, "https://www.meesho.com");
+  }
+});
+
+// POST /api/contact - Store customer support inquiries in MongoDB
+app.post("/api/contact", async (req, res) => {
+  try {
+    const { name, email, phone, storeName, category, subject, message } = req.body || {};
+    if (!name || !email || !phone || !message) {
+      return res.status(400).json({ error: "Name, email, phone, and message are required fields." });
+    }
+
+    const db = await getDb();
+    const referenceId = "LP-" + Date.now().toString(36).toUpperCase() + "-" + Math.floor(100 + Math.random() * 900);
+    const now = new Date();
+
+    const inquiryDoc = {
+      referenceId,
+      name: String(name).trim(),
+      email: String(email).trim().toLowerCase(),
+      phone: String(phone).trim(),
+      storeName: storeName ? String(storeName).trim() : "",
+      category: category || "support",
+      subject: subject ? String(subject).trim() : "General Support Inquiry",
+      message: String(message).trim(),
+      status: "OPEN",
+      ip: req.headers["x-forwarded-for"] || req.socket?.remoteAddress || "",
+      userAgent: (req.headers["user-agent"] || "").substring(0, 200),
+      createdAt: now,
+      updatedAt: now,
+    };
+
+    const result = await db.collection("contact_inquiries").insertOne(inquiryDoc);
+    console.log(`[ContactInquiry] Saved inquiry #${referenceId} from ${email} (${phone})`);
+
+    return res.status(201).json({
+      success: true,
+      referenceId,
+      message: "Your inquiry has been successfully registered and saved in our database.",
+      inquiryId: result.insertedId,
+      createdAt: now,
+    });
+  } catch (err) {
+    console.error("[ContactInquiryError]", err);
+    return res.status(500).json({ error: "Failed to save inquiry to database: " + (err.message || err) });
+  }
+});
+
+// GET /api/contact - Retrieve inquiries (for support dashboard / admin inspection)
+app.get("/api/contact", async (req, res) => {
+  try {
+    const db = await getDb();
+    const { email, limit = 50 } = req.query;
+    const filter = email ? { email: String(email).toLowerCase() } : {};
+    const inquiries = await db
+      .collection("contact_inquiries")
+      .find(filter)
+      .sort({ createdAt: -1 })
+      .limit(Math.min(parseInt(limit, 10) || 50, 100))
+      .toArray();
+
+    return res.json({ success: true, inquiries });
+  } catch (err) {
+    console.error("[ContactInquiriesFetchError]", err);
+    return res.status(500).json({ error: "Failed to fetch contact inquiries." });
   }
 });
 
