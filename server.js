@@ -2303,11 +2303,11 @@ app.post("/api/generate_deprecated", upload.single("pdf"), async (req, res) => {
     const numPagesToProcess = Math.max(0, rangeEndIdx - rangeStartIdx);
 
     if (shouldStampQr) {
-      const font = await srcDoc.embedFont(StandardFonts.TimesRomanItalic);
+      const font = await srcDoc.embedFont(StandardFonts.Helvetica);
       const boldFont = await srcDoc.embedFont(StandardFonts.HelveticaBold);
       const x = parseFloat(qrX) || 0;
       const y = parseFloat(qrY) || 0;
-      const size = parseFloat(qrSize) || 90;
+      const size = parseFloat(qrSize) || 70;
       const fSize = parseFloat(fontSize) || 8;
 
       const isBadgeMode = stampStyle === "badge";
@@ -2316,10 +2316,49 @@ app.post("/api/generate_deprecated", upload.single("pdf"), async (req, res) => {
       const qrImageCache = new Map();
       const unicodeImageCache = new Map();
 
+      const measureBackendTextWidth = (str, fontObj, fontSz, isBold = false) => {
+        if (!str) return 0;
+        if (/[^\x00-\x7F]/.test(str)) {
+          return str.length * fontSz * 0.7;
+        }
+        try {
+          return fontObj.widthOfTextAtSize(str, fontSz);
+        } catch (e) {
+          return str.length * fontSz * 0.65;
+        }
+      };
+
+      const wrapBackendLines = (rawText, maxWidth, fontObj, fontSz) => {
+        if (!rawText) return [];
+        const initialLines = rawText.split("\n");
+        const result = [];
+        for (const rawLine of initialLines) {
+          if (!rawLine.trim()) {
+            result.push("");
+            continue;
+          }
+          const words = rawLine.split(/\s+/);
+          let cur = "";
+          for (const word of words) {
+            const test = cur ? `${cur} ${word}` : word;
+            const testW = measureBackendTextWidth(test, fontObj, fontSz, false);
+            if (testW > maxWidth && cur) {
+              result.push(cur);
+              cur = word;
+            } else {
+              cur = test;
+            }
+          }
+          if (cur) result.push(cur);
+        }
+        return result;
+      };
+
       for (let i = 0; i < numPagesToProcess; i++) {
         const pageIdx = rangeStartIdx + i;
         const page = srcDoc.getPage(pageIdx);
         const data = fields[i] || {};
+        const pageWidth = page.getWidth();
 
         const qrContent = fillTemplate(qrText, data).trim() || `Page-${pageIdx + 1}`;
         let qrImage = qrImageCache.get(qrContent);
@@ -2329,77 +2368,164 @@ app.post("/api/generate_deprecated", upload.single("pdf"), async (req, res) => {
           qrImageCache.set(qrContent, qrImage);
         }
 
-        let actualQrX = x;
-        let actualTextX = x + size + 10;
+        const detailFilled = fillTemplate(detailText, data);
+        const padX = 8;
+        const padY = 6;
+        const gapQrText = 8;
+        const dividerGap = 6;
+        const storeFontSize = Math.max(8, Math.min(14, fSize * 1.05));
+        const actualQrSize = size;
 
         if (isBadgeMode) {
-          const storeWidth = boldFont.widthOfTextAtSize(cleanStoreName, Math.max(9, fSize * 0.9));
-          const boxHeight = Math.max(size + 10, fSize * 2.2 + 14);
-          const detailFilledCalc = fillTemplate(detailText, data);
-          const calcLines = wrapText(detailFilledCalc, 200, font, fSize);
-          const textMaxWidthCalc = Math.max(60, calcLines.reduce((m, l) => Math.max(m, font.widthOfTextAtSize(l, fSize)), 0));
-          const boxWidth = 14 + storeWidth + 12 + 1 + 10 + size + 8 + textMaxWidthCalc + 12;
+          const storeTextWidth = measureBackendTextWidth(cleanStoreName, boldFont, storeFontSize, true);
+          const prefixWidth = padX + storeTextWidth + dividerGap + 1.2 + dividerGap + actualQrSize + gapQrText;
+          const maxAllowedTextWidth = Math.max(60, pageWidth - x - prefixWidth - padX - 8);
+
+          const wrappedLines = wrapBackendLines(detailFilled, maxAllowedTextWidth, font, fSize);
+
+          let maxLineWidth = 0;
+          for (let li = 0; li < wrappedLines.length; li++) {
+            const line = wrappedLines[li];
+            const isHeader = li === 0;
+            const w = measureBackendTextWidth(line, isHeader ? boldFont : font, fSize, isHeader);
+            if (w > maxLineWidth) maxLineWidth = w;
+          }
+          if (maxLineWidth < 30 && wrappedLines.length > 0) maxLineWidth = 30;
+
+          const lineHeight = fSize + 3;
+          const totalTextHeight = wrappedLines.length > 0 ? ((wrappedLines.length - 1) * lineHeight + fSize) : 0;
+          const contentHeight = Math.max(actualQrSize, totalTextHeight, storeFontSize + 4);
+          const boxHeight = contentHeight + padY * 2;
+          const boxWidth = prefixWidth + maxLineWidth + padX;
+
+          const boxX = x;
+          const boxY = y;
+          const centerY = boxY + (boxHeight / 2);
 
           // 1. Draw Pill/Badge Box Frame
           page.drawRectangle({
-            x: x - 4,
-            y: y - 4,
+            x: boxX,
+            y: boxY,
             width: boxWidth,
             height: boxHeight,
             color: rgb(1, 1, 1),
             borderColor: rgb(0, 0, 0),
-            borderWidth: 1.5,
+            borderWidth: 1.2,
           });
 
           // 2. Draw Store Name Text on left
+          const storeX = boxX + padX;
+          const storeY = centerY - (storeFontSize * 0.35);
           page.drawText(cleanStoreName, {
-            x: x + 6,
-            y: y + (boxHeight / 2) - (fSize * 0.45),
-            size: Math.max(9, fSize * 0.9),
+            x: storeX,
+            y: storeY,
+            size: storeFontSize,
             font: boldFont,
             color: rgb(0, 0, 0),
           });
 
           // 3. Draw Vertical Divider Line
-          const divX = x + 6 + storeWidth + 10;
+          const divX = storeX + storeTextWidth + dividerGap;
           page.drawLine({
-            start: { x: divX, y: y - 1 },
-            end: { x: divX, y: y + boxHeight - 7 },
-            thickness: 1.2,
+            start: { x: divX, y: boxY + 4 },
+            end: { x: divX, y: boxY + boxHeight - 4 },
+            thickness: 1.0,
             color: rgb(0, 0, 0),
           });
 
-          actualQrX = divX + 10;
-          actualTextX = actualQrX + size + 8;
-        }
+          // 4. Draw QR Code
+          const qrXPos = divX + dividerGap;
+          const qrYPos = centerY - (actualQrSize / 2);
+          page.drawImage(qrImage, {
+            x: qrXPos,
+            y: qrYPos,
+            width: actualQrSize,
+            height: actualQrSize,
+          });
 
-        page.drawImage(qrImage, { x: actualQrX, y, width: size, height: size });
+          // 5. Draw Text Lines
+          const textXPos = qrXPos + actualQrSize + gapQrText;
+          const textBlockStartY = centerY + (totalTextHeight / 2) - (fSize * 0.75);
 
-        const detailFilled = fillTemplate(detailText, data);
-        if (detailFilled.trim()) {
-          const pageWidth = page.getWidth();
-          const maxWidth = Math.max(30, pageWidth - actualTextX - 15);
-          const lines = wrapText(detailFilled, maxWidth, font, fSize);
-
-          const lineHeight = fSize + 3;
-          const totalTextHeight = (lines.length - 1) * lineHeight + fSize;
-          
-          const qrCenterY = y + size / 2;
-          const startY = qrCenterY + totalTextHeight / 2 - fSize * 0.85;
-
-          for (let li = 0; li < lines.length; li++) {
-            const cleanLine = lines[li];
-            if (cleanLine) {
-              const textY = startY - li * lineHeight;
-              if (textY >= 0) {
+          for (let li = 0; li < wrappedLines.length; li++) {
+            const line = wrappedLines[li];
+            if (line && line.trim()) {
+              const curTextY = textBlockStartY - (li * lineHeight);
+              if (curTextY >= boxY) {
                 await drawTextOrImageLine(
                   page,
                   srcDoc,
-                  cleanLine,
-                  actualTextX,
-                  textY,
+                  line,
+                  textXPos,
+                  curTextY,
                   fSize,
-                  font,
+                  li === 0 ? boldFont : font,
+                  rgb(0, 0, 0),
+                  unicodeImageCache
+                );
+              }
+            }
+          }
+        } else {
+          // Classic Minimal Mode
+          const prefixWidth = padX + actualQrSize + gapQrText;
+          const maxAllowedTextWidth = Math.max(60, pageWidth - x - prefixWidth - padX - 8);
+          const wrappedLines = wrapBackendLines(detailFilled, maxAllowedTextWidth, font, fSize);
+
+          let maxLineWidth = 0;
+          for (let li = 0; li < wrappedLines.length; li++) {
+            const line = wrappedLines[li];
+            const isHeader = li === 0;
+            const w = measureBackendTextWidth(line, isHeader ? boldFont : font, fSize, isHeader);
+            if (w > maxLineWidth) maxLineWidth = w;
+          }
+          if (maxLineWidth < 30 && wrappedLines.length > 0) maxLineWidth = 30;
+
+          const lineHeight = fSize + 3;
+          const totalTextHeight = wrappedLines.length > 0 ? ((wrappedLines.length - 1) * lineHeight + fSize) : 0;
+          const contentHeight = Math.max(actualQrSize, totalTextHeight);
+          const boxHeight = contentHeight + padY * 2;
+          const boxWidth = prefixWidth + maxLineWidth + padX;
+
+          const boxX = x;
+          const boxY = y;
+          const centerY = boxY + (boxHeight / 2);
+
+          page.drawRectangle({
+            x: boxX,
+            y: boxY,
+            width: boxWidth,
+            height: boxHeight,
+            color: rgb(1, 1, 1),
+            borderColor: rgb(0, 0, 0),
+            borderWidth: 1.0,
+          });
+
+          const qrXPos = boxX + padX;
+          const qrYPos = centerY - (actualQrSize / 2);
+          page.drawImage(qrImage, {
+            x: qrXPos,
+            y: qrYPos,
+            width: actualQrSize,
+            height: actualQrSize,
+          });
+
+          const textXPos = qrXPos + actualQrSize + gapQrText;
+          const textBlockStartY = centerY + (totalTextHeight / 2) - (fSize * 0.75);
+
+          for (let li = 0; li < wrappedLines.length; li++) {
+            const line = wrappedLines[li];
+            if (line && line.trim()) {
+              const curTextY = textBlockStartY - (li * lineHeight);
+              if (curTextY >= boxY) {
+                await drawTextOrImageLine(
+                  page,
+                  srcDoc,
+                  line,
+                  textXPos,
+                  curTextY,
+                  fSize,
+                  li === 0 ? boldFont : font,
                   rgb(0, 0, 0),
                   unicodeImageCache
                 );
