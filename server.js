@@ -232,10 +232,12 @@ function wrapCanvasText(ctx, text, maxLineWidth) {
   return lines.length > 0 ? lines : [" "];
 }
 
-async function renderStampBadgeCanvasBackend(storeNameStr, qrContentStr, detailTextStr, qrSizeVal, fontSizeVal, maxAllowedWidthPt = 260) {
+async function renderStampBadgeCanvasBackend(storeNameStr, qrContentStr, detailTextStr, qrSizeVal, fontSizeVal, pageWidthPt = 288) {
   const scale = 4; // High DPI (300+ DPI for crisp thermal printing)
   const cleanStore = (storeNameStr || "STORE").trim().toUpperCase();
 
+  const isA4 = pageWidthPt > 400;
+  const maxAllowedWidthPt = isA4 ? Math.min(pageWidthPt - 28, 540) : Math.min(pageWidthPt - 24, 266);
   const maxTotalWidthPx = Math.round(maxAllowedWidthPt * scale);
 
   // Setup measuring canvas
@@ -243,29 +245,33 @@ async function renderStampBadgeCanvasBackend(storeNameStr, qrContentStr, detailT
   const mCtx = measureCanvas.getContext("2d");
 
   // Determine Store Font Size
-  let storeFontSizePt = Math.max(11, Math.min(14, fontSizeVal * 1.3));
+  const baseScaleMultiplier = isA4 ? 1.65 : 1.3;
+
+  let storeFontSizePt = Math.round(Math.max(14 * baseScaleMultiplier, fontSizeVal * 1.5 * baseScaleMultiplier));
   let storeFontCss = `bold ${Math.round(storeFontSizePt * scale)}px "Nirmala UI", "Segoe UI", Arial, sans-serif`;
   mCtx.font = storeFontCss;
   let storeTextWidth = mCtx.measureText(cleanStore).width;
 
-  // Auto-shrink store name if it is very long (e.g. "MAHIR ENTERPRISE GUJARAT")
-  const maxStoreWidthPx = Math.round(85 * scale);
-  while (storeTextWidth > maxStoreWidthPx && storeFontSizePt > 8.5) {
+  // Auto-shrink store name if it is very long
+  const maxStoreWidthPx = Math.round((isA4 ? 165 : 95) * scale);
+  while (storeTextWidth > maxStoreWidthPx && storeFontSizePt > 9.5) {
     storeFontSizePt -= 0.5;
     storeFontCss = `bold ${Math.round(storeFontSizePt * scale)}px "Nirmala UI", "Segoe UI", Arial, sans-serif`;
     mCtx.font = storeFontCss;
     storeTextWidth = mCtx.measureText(cleanStore).width;
   }
 
+  // Dynamic Sizing for Icon and QR
+  const iconSizePx = Math.round((isA4 ? 40 : 30) * scale);
+  const qrScaledSizePx = Math.round((isA4 ? 56 : 42) * scale);
+
   // Layout spacing
-  const padXPx = Math.round(10 * scale);
-  const padYPx = Math.round(6 * scale);
-  const iconSizePx = Math.round(22 * scale);
-  const iconTextGapPx = Math.round(8 * scale);
-  const dividerGapPx = Math.round(10 * scale);
-  const dividerWidthPx = Math.round(1.5 * scale);
-  const qrScaledSizePx = Math.round(Math.max(26, Math.min(34, qrSizeVal * 0.45)) * scale);
-  const qrTextGapPx = Math.round(8 * scale);
+  const padXPx = Math.round((isA4 ? 15 : 11) * scale);
+  const padYPx = Math.round((isA4 ? 11 : 9) * scale);
+  const iconTextGapPx = Math.round((isA4 ? 10 : 7) * scale);
+  const dividerGapPx = Math.round((isA4 ? 14 : 9) * scale);
+  const dividerWidthPx = Math.round((isA4 ? 2.2 : 1.8) * scale);
+  const qrTextGapPx = Math.round((isA4 ? 12 : 8) * scale);
 
   const leftSectionWidthPx = iconSizePx + iconTextGapPx + storeTextWidth;
 
@@ -274,14 +280,14 @@ async function renderStampBadgeCanvasBackend(storeNameStr, qrContentStr, detailT
   const maxAvailableTextWidthPx = Math.max(Math.round(60 * scale), maxTotalWidthPx - fixedWidthPx);
 
   // Auto-fit detail text
-  let detailFontSizePt = Math.max(7, Math.min(10, fontSizeVal));
+  let detailFontSizePt = Math.max(isA4 ? 10.5 : 8, fontSizeVal * (isA4 ? 1.15 : 0.95));
   let detailFontCss = `bold ${Math.round(detailFontSizePt * scale)}px "Nirmala UI", "Segoe UI", Arial, sans-serif`;
   mCtx.font = detailFontCss;
 
   let wrappedLines = wrapCanvasText(mCtx, detailTextStr || "Follow\nour page", maxAvailableTextWidthPx);
 
-  // If text creates more than 3 lines, shrink font size to fit cleanly
-  while (wrappedLines.length > 3 && detailFontSizePt > 6.5) {
+  // If text creates more than 4 lines, shrink font size to fit cleanly
+  while (wrappedLines.length > 4 && detailFontSizePt > 6.5) {
     detailFontSizePt -= 0.5;
     detailFontCss = `bold ${Math.round(detailFontSizePt * scale)}px "Nirmala UI", "Segoe UI", Arial, sans-serif`;
     mCtx.font = detailFontCss;
@@ -309,8 +315,8 @@ async function renderStampBadgeCanvasBackend(storeNameStr, qrContentStr, detailT
   const ctx = canvas.getContext("2d");
 
   // 1. White Background with Rounded Outer Border (Exact Match)
-  const borderRadiusPx = Math.round(10 * scale);
-  const borderWidthPx = Math.round(2 * scale);
+  const borderRadiusPx = Math.round((isA4 ? 14 : 10) * scale);
+  const borderWidthPx = Math.round((isA4 ? 2.5 : 2) * scale);
 
   ctx.fillStyle = "#FFFFFF";
   ctx.strokeStyle = "#000000";
@@ -342,8 +348,8 @@ async function renderStampBadgeCanvasBackend(storeNameStr, qrContentStr, detailT
   // 4. Draw Vertical Divider Line
   curXPx += storeTextWidth + dividerGapPx;
   ctx.beginPath();
-  ctx.moveTo(curXPx, padYPx + Math.round(2 * scale));
-  ctx.lineTo(curXPx, totalHeightPx - padYPx - Math.round(2 * scale));
+  ctx.moveTo(curXPx, padYPx + Math.round(2.5 * scale));
+  ctx.lineTo(curXPx, totalHeightPx - padYPx - Math.round(2.5 * scale));
   ctx.strokeStyle = "#000000";
   ctx.lineWidth = dividerWidthPx;
   ctx.stroke();
@@ -2627,12 +2633,13 @@ app.post("/api/generate_deprecated", upload.single("pdf"), async (req, res) => {
       for (let i = 0; i < numPagesToProcess; i++) {
         const pageIdx = rangeStartIdx + i;
         const page = srcDoc.getPage(pageIdx);
+        const pageWidth = page.getWidth();
         const data = fields[i] || {};
 
         const qrContent = fillTemplate(qrText, data).trim() || `Page-${pageIdx + 1}`;
         const detailFilled = fillTemplate(detailText, data) || "Follow\nour page";
 
-        const cacheKey = `${cleanStoreName}__${qrContent}__${detailFilled}__${size}__${fSize}`;
+        const cacheKey = `${cleanStoreName}__${qrContent}__${detailFilled}__${size}__${fSize}__${pageWidth}`;
         let badgeObj = badgeImageCache.get(cacheKey);
 
         if (!badgeObj) {
@@ -2641,7 +2648,8 @@ app.post("/api/generate_deprecated", upload.single("pdf"), async (req, res) => {
             qrContent,
             detailFilled,
             size,
-            fSize
+            fSize,
+            pageWidth
           );
           const embeddedImg = await srcDoc.embedPng(pngBuffer);
           badgeObj = {
