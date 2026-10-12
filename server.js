@@ -817,6 +817,8 @@ async function saveCustomerOrders(fields, userEmail = "guest") {
         continue;
       }
 
+      const platform = (item.platform || "meesho").toLowerCase().trim();
+
       validItems.push({
         custName,
         mobile,
@@ -829,6 +831,7 @@ async function saveCustomerOrders(fields, userEmail = "guest") {
         qty,
         state,
         custKey,
+        platform,
       });
 
       if (orderNo) {
@@ -877,6 +880,7 @@ async function saveCustomerOrders(fields, userEmail = "guest") {
               customerMobile: item.mobile,
               customerAddress: item.address,
               state: item.state,
+              platform: item.platform,
               orderDate: item.orderDate,
               sku: item.sku,
               qty: item.qty,
@@ -898,6 +902,7 @@ async function saveCustomerOrders(fields, userEmail = "guest") {
         qty: item.qty,
         state: item.state,
         address: item.address,
+        platform: item.platform,
         processedAt: new Date(),
       };
 
@@ -908,12 +913,17 @@ async function saveCustomerOrders(fields, userEmail = "guest") {
 
         if (!isDuplicateOrder) {
           const updatedOrders = [...(custRecord.orders || []), newOrderObj];
+          const prevPlatforms = custRecord.platforms || [custRecord.platform || "meesho"];
+          const updatedPlatforms = Array.from(new Set([...prevPlatforms, item.platform]));
+
           const updatedRecord = {
             ...custRecord,
             name: item.custName || custRecord.name,
             mobileNumber: item.mobile || custRecord.mobileNumber,
             address: item.address || custRecord.address,
             state: item.state || custRecord.state,
+            platform: item.platform || custRecord.platform || "meesho",
+            platforms: updatedPlatforms,
             orderCount: updatedOrders.length,
             orders: updatedOrders,
             lastOrderDate: item.orderDate,
@@ -930,6 +940,8 @@ async function saveCustomerOrders(fields, userEmail = "guest") {
           mobileNumber: item.mobile,
           address: item.address,
           state: item.state,
+          platform: item.platform || "meesho",
+          platforms: [item.platform || "meesho"],
           orderCount: 1,
           orders: [newOrderObj],
           firstOrderDate: item.orderDate,
@@ -953,6 +965,8 @@ async function saveCustomerOrders(fields, userEmail = "guest") {
                 mobileNumber: custData.mobileNumber,
                 address: custData.address,
                 state: custData.state,
+                platform: custData.platform || "meesho",
+                platforms: custData.platforms || [custData.platform || "meesho"],
                 orderCount: custData.orderCount,
                 orders: custData.orders,
                 lastOrderDate: custData.lastOrderDate,
@@ -1244,9 +1258,10 @@ app.get("/api/customer-analysis", async (req, res) => {
     const repeatOnly = req.query.repeatOnly === "true";
     const selectedState = (req.query.state || "").trim();
     const selectedDistrict = (req.query.district || "").trim();
+    const selectedPlatform = (req.query.platform || "ALL").trim().toLowerCase();
     const isRefresh = req.query.refresh === "true" || req.query.force === "true";
 
-    const cacheKey = `cust_analysis_${activeEmail}_${search}_${repeatOnly}_${selectedState}_${selectedDistrict}`;
+    const cacheKey = `cust_analysis_${activeEmail}_${search}_${repeatOnly}_${selectedState}_${selectedDistrict}_${selectedPlatform}`;
     if (!isRefresh) {
       const cached = getCachedData(cacheKey);
       if (cached) {
@@ -1289,6 +1304,33 @@ app.get("/api/customer-analysis", async (req, res) => {
       c.district = c.district || detectDistrict(c.address, c.state);
     });
 
+    // Calculate marketplace platform breakdown across all customers
+    let meeshoCount = 0;
+    let flipkartCount = 0;
+    let amazonCount = 0;
+
+    allCustomers.forEach((c) => {
+      const p = (c.platform || "").toLowerCase();
+      const plist = (c.platforms || (p ? [p] : [])).map((x) => x.toLowerCase());
+      const hasOrderPlatform = (plat) =>
+        (c.orders || []).some((o) => (o.platform || "").toLowerCase() === plat);
+
+      if (
+        plist.includes("meesho") ||
+        p === "meesho" ||
+        (!p && plist.length === 0) ||
+        hasOrderPlatform("meesho")
+      ) {
+        meeshoCount++;
+      }
+      if (plist.includes("flipkart") || p === "flipkart" || hasOrderPlatform("flipkart")) {
+        flipkartCount++;
+      }
+      if (plist.includes("amazon") || p === "amazon" || hasOrderPlatform("amazon")) {
+        amazonCount++;
+      }
+    });
+
     // 1. Calculate state order counts
     const stateCountsMap = {};
     allCustomers.forEach((c) => {
@@ -1307,15 +1349,28 @@ app.get("/api/customer-analysis", async (req, res) => {
 
     const totalOrdersAll = Object.values(stateCountsMap).reduce((a, b) => a + b, 0);
 
-    // 2. Filter by State first
-    let stateFilteredCustomers = [...allCustomers];
+    // 2. Filter by Platform if specified
+    let platformFilteredCustomers = [...allCustomers];
+    if (selectedPlatform && selectedPlatform !== "all") {
+      platformFilteredCustomers = platformFilteredCustomers.filter((c) => {
+        const p = (c.platform || "meesho").toLowerCase();
+        const plist = (c.platforms || [p]).map((x) => x.toLowerCase());
+        const hasOrderPlatform = (c.orders || []).some(
+          (o) => (o.platform || "meesho").toLowerCase() === selectedPlatform
+        );
+        return p === selectedPlatform || plist.includes(selectedPlatform) || hasOrderPlatform;
+      });
+    }
+
+    // 3. Filter by State first
+    let stateFilteredCustomers = [...platformFilteredCustomers];
     if (selectedState && selectedState.toUpperCase() !== "ALL") {
       stateFilteredCustomers = stateFilteredCustomers.filter(
         (c) => (c.state || "").toLowerCase() === selectedState.toLowerCase()
       );
     }
 
-    // 3. Calculate district order counts for the selected state
+    // 4. Calculate district order counts for the selected state
     const districtCountsMap = {};
     stateFilteredCustomers.forEach((c) => {
       const dist = (c.district || "Central").trim();
@@ -1333,7 +1388,7 @@ app.get("/api/customer-analysis", async (req, res) => {
 
     const totalOrdersForSelectedState = Object.values(districtCountsMap).reduce((a, b) => a + b, 0);
 
-    // 4. Filter by District if specified
+    // 5. Filter by District if specified
     let customers = [...stateFilteredCustomers];
     if (selectedDistrict && selectedDistrict.toUpperCase() !== "ALL") {
       customers = customers.filter(
@@ -1383,6 +1438,9 @@ app.get("/api/customer-analysis", async (req, res) => {
     const formattedList = customers
       .map((c) => {
         const cnt = c.orderCount || c.orders?.length || 1;
+        const custPlat = c.platform || c.orders?.[0]?.platform || "meesho";
+        const custPlatforms = c.platforms || [custPlat];
+
         const enrichedOrders = (c.orders || []).map((o) => {
           const oNo = String(o.orderNo || "").trim().toLowerCase();
           const subId = String(o.subOrderId || o.subOrderNo || "").trim().toLowerCase();
@@ -1397,6 +1455,7 @@ app.get("/api/customer-analysis", async (req, res) => {
 
           return {
             ...o,
+            platform: o.platform || custPlat,
             hasReturn,
             isPostDeliveryReturn,
             returnType: isPostDeliveryReturn
@@ -1419,6 +1478,8 @@ app.get("/api/customer-analysis", async (req, res) => {
           address: c.address || "N/A",
           state: c.state || "India",
           district: c.district || "Central",
+          platform: custPlat,
+          platforms: custPlatforms,
           orderCount: cnt,
           isRepeat: cnt > 1,
           firstOrderDate: c.firstOrderDate || "",
@@ -1439,6 +1500,10 @@ app.get("/api/customer-analysis", async (req, res) => {
         totalOrdersProcessed,
         totalOrdersAll,
         totalOrdersForSelectedState,
+        meeshoCustomersCount: meeshoCount,
+        flipkartCustomersCount: flipkartCount,
+        amazonCustomersCount: amazonCount,
+        selectedPlatform: req.query.platform || "ALL",
         allStatesWithCounts: allStatesWithCounts || [],
         allDistrictsWithCounts: allDistrictsWithCounts || [],
       },
@@ -2547,10 +2612,31 @@ app.post("/api/preview", upload.single("pdf"), async (req, res) => {
     // Check past return history for extracted label pages
     const returnWarnings = await checkReturnHistoryForPages(fields, getUserEmail(req));
 
-    // Check previously saved duplicate orders
-    const duplicateOrderWarnings = await checkDuplicateOrdersForPages(fields, getUserEmail(req));
+    // Calculate platform counts & detect mixed uploads
+    const platformCounts = { meesho: 0, flipkart: 0, amazon: 0 };
+    fields.forEach((f) => {
+      const p = (f.platform || "meesho").toLowerCase();
+      if (platformCounts[p] !== undefined) {
+        platformCounts[p]++;
+      } else {
+        platformCounts[p] = 1;
+      }
+    });
+    const platformsPresent = Object.keys(platformCounts).filter((k) => platformCounts[k] > 0);
+    const isMixed = platformsPresent.length > 1;
+    const dominantPlatform =
+      platformsPresent.sort((a, b) => platformCounts[b] - platformCounts[a])[0] || "meesho";
 
-    res.json({ pageCount: fields.length, pages: fields, returnWarnings, duplicateOrderWarnings });
+    res.json({
+      pageCount: fields.length,
+      pages: fields,
+      returnWarnings,
+      duplicateOrderWarnings,
+      platform: dominantPlatform,
+      platformsPresent,
+      platformCounts,
+      isMixed,
+    });
   } catch (err) {
     console.error("Preview API Error:", err);
     res.status(500).json({ error: err.message || "Failed to generate PDF preview" });
