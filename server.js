@@ -3276,66 +3276,65 @@ app.post("/api/user/settings", async (req, res) => {
     const email = getUserEmail(req);
     if (!email) return res.status(401).json({ error: "Unauthorized / Missing user email" });
 
-    const {
-      storeName,
-      phone,
-      supportEmail,
-      storeUrl,
-      instagramHandle,
-      customNote,
-      enableQr,
-      useNativeScript,
-      qrText,
-      detailText,
-      qrX,
-      qrY,
-      qrSize,
-      fontSize,
-      sortBy,
-      sortOrder,
-      downloadSummary,
-      enableWhatsApp,
-      waApiKey,
-      waReceiverNumber,
-      pdfReceiverNumber,
-      imageReceiverNumber,
-    } = req.body;
+    const allowedFields = [
+      "storeName",
+      "phone",
+      "supportEmail",
+      "storeUrl",
+      "instagramHandle",
+      "customNote",
+      "enableQr",
+      "useNativeScript",
+      "stampStyle",
+      "qrText",
+      "detailText",
+      "qrX",
+      "qrY",
+      "qrSize",
+      "fontSize",
+      "sortBy",
+      "sortOrder",
+      "downloadSummary",
+      "enableWhatsApp",
+      "sendWhatsApp",
+      "cropEnabled",
+      "cropPreset",
+      "cropMode",
+      "cropTop",
+      "cropBottom",
+      "cropLeft",
+      "cropRight",
+      "waApiKey",
+      "waReceiverNumber",
+      "pdfReceiverNumber",
+      "imageReceiverNumber",
+    ];
+
+    const updateDoc = {
+      email,
+      updatedAt: new Date(),
+    };
+
+    for (const key of allowedFields) {
+      if (req.body[key] !== undefined) {
+        updateDoc[key] = req.body[key];
+      }
+    }
+
+    if (updateDoc.sendWhatsApp !== undefined && updateDoc.enableWhatsApp === undefined) {
+      updateDoc.enableWhatsApp = updateDoc.sendWhatsApp;
+    } else if (updateDoc.enableWhatsApp !== undefined && updateDoc.sendWhatsApp === undefined) {
+      updateDoc.sendWhatsApp = updateDoc.enableWhatsApp;
+    }
 
     const db = await getDb();
     await db.collection("user_settings").updateOne(
       { email },
-      {
-        $set: {
-          email,
-          storeName: storeName !== undefined ? storeName : "",
-          phone: phone !== undefined ? phone : "",
-          supportEmail: supportEmail !== undefined ? supportEmail : "",
-          storeUrl: storeUrl !== undefined ? storeUrl : "",
-          instagramHandle: instagramHandle !== undefined ? instagramHandle : "",
-          customNote: customNote !== undefined ? customNote : "",
-          enableQr: enableQr !== undefined ? enableQr : true,
-          useNativeScript: useNativeScript !== undefined ? useNativeScript : true,
-          qrText: qrText !== undefined ? qrText : "https://www.meesho.com/themahirenterprise",
-          detailText: detailText !== undefined ? detailText : "Scan to Follow Meesho Store!\nOrder: {orderNo}\nSKU: {sku}",
-          qrX: qrX !== undefined ? qrX : 14,
-          qrY: qrY !== undefined ? qrY : 14,
-          qrSize: qrSize !== undefined ? qrSize : 70,
-          fontSize: fontSize !== undefined ? fontSize : 8,
-          sortBy: sortBy !== undefined ? sortBy : "sku",
-          sortOrder: sortOrder !== undefined ? sortOrder : "asc",
-          downloadSummary: downloadSummary !== undefined ? downloadSummary : false,
-          enableWhatsApp: enableWhatsApp !== undefined ? enableWhatsApp : true,
-          waApiKey: waApiKey !== undefined ? waApiKey : "wa_c6854599bd4b7a54cad78edbdd6ace51",
-          waReceiverNumber: waReceiverNumber !== undefined ? waReceiverNumber : "919664720473",
-          pdfReceiverNumber: pdfReceiverNumber !== undefined ? pdfReceiverNumber : (waReceiverNumber || phone || "919664720473"),
-          imageReceiverNumber: imageReceiverNumber !== undefined ? imageReceiverNumber : (waReceiverNumber || phone || "919664720473"),
-          updatedAt: new Date(),
-        },
-      },
+      { $set: updateDoc },
       { upsert: true }
     );
 
-    res.json({ success: true });
+    res.json({ success: true, settings: updateDoc });
   } catch (err) {
     console.error("Error saving settings:", err);
     res.status(500).json({ error: err.message });
@@ -3416,7 +3415,24 @@ app.post("/api/templates", async (req, res) => {
       createdAt: new Date(),
     });
 
-    res.json({ success: true, id: result.insertedId });
+    const newTemplate = {
+      _id: result.insertedId,
+      id: String(result.insertedId),
+      email,
+      name: name.trim(),
+      description: description || "",
+      enableQr: Boolean(enableQr),
+      qrText: qrText || "https://www.meesho.com/themahirenterprise",
+      detailText: detailText || "",
+      qrX: parseFloat(qrX) || 12,
+      qrY: parseFloat(qrY) || 10,
+      qrSize: parseFloat(qrSize) || 142,
+      fontSize: parseFloat(fontSize) || 29,
+      sortBy: sortBy || "sku",
+      sortOrder: sortOrder || "asc",
+      createdAt: new Date(),
+    };
+    res.json({ success: true, id: result.insertedId, template: newTemplate });
   } catch (err) {
     console.error("Error creating template:", err);
     res.status(500).json({ error: err.message });
