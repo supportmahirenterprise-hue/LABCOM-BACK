@@ -48,7 +48,7 @@ initCanvasFonts();
 
 // ---- HIGH-PERFORMANCE IN-MEMORY TTL CACHE & INDEXING ENGINE --------------
 const apiCache = new Map();
-const DEFAULT_TTL_MS = 15000; // 15 seconds TTL for rapid sub-5ms responses
+const DEFAULT_TTL_MS = 300000; // 5 minutes high-speed cache // 15 seconds TTL for rapid sub-5ms responses
 
 function getCachedData(key) {
   const cached = apiCache.get(key);
@@ -463,8 +463,8 @@ function getUserEmail(req) {
   if (!req) return "";
   return (
     (req.headers && req.headers["x-user-email"]) ||
-    (req.query && req.query.email) ||
-    (req.body && req.body.email) ||
+    (req.query && (req.query.email || req.query.sellerEmail || req.query.userEmail)) ||
+    (req.body && (req.body.email || req.body.sellerEmail || req.body.userEmail)) ||
     ""
   ).toString().toLowerCase().trim();
 }
@@ -976,6 +976,7 @@ async function saveCustomerOrders(fields, userEmail = "guest") {
     }
     if (customerOps.length > 0) {
       await customersCol.bulkWrite(customerOps, { ordered: false });
+      clearAllApiCache();
     }
   } catch (err) {
     console.error("Error saving customer orders to MongoDB:", err.message);
@@ -1180,6 +1181,21 @@ const DISTRICTS_MAP = {
   Goa: ["Panaji", "Panjim", "Margao", "Vasco", "Mapusa", "Ponda", "Bicholim", "Curchorem", "South Goa", "North Goa"],
 };
 
+// Precompiled district regex patterns for sub-millisecond lookups
+const COMPILED_DISTRICTS = {};
+Object.keys(DISTRICTS_MAP).forEach((st) => {
+  COMPILED_DISTRICTS[st] = DISTRICTS_MAP[st].map((d) => ({
+    name: d,
+    reg: new RegExp(`\\b${d.toUpperCase()}\\b`, "i"),
+  }));
+});
+const COMPILED_ALL_DISTRICTS = Object.values(DISTRICTS_MAP)
+  .flat()
+  .map((d) => ({
+    name: d,
+    reg: new RegExp(`\\b${d.toUpperCase()}\\b`, "i"),
+  }));
+
 function detectDistrict(address = "", state = "") {
   if (!address) return "Central";
 
@@ -1201,10 +1217,11 @@ function detectDistrict(address = "", state = "") {
 
   const distList = stateKey ? DISTRICTS_MAP[stateKey] : Object.values(DISTRICTS_MAP).flat();
 
-  for (const dist of distList) {
-    const reg = new RegExp(`\\b${dist.toUpperCase()}\\b`, "i");
-    if (reg.test(upperAddr)) {
-      return dist;
+  // Precompiled fast dictionary check
+  const compiledList = stateKey && COMPILED_DISTRICTS[stateKey] ? COMPILED_DISTRICTS[stateKey] : COMPILED_ALL_DISTRICTS;
+  for (let i = 0; i < compiledList.length; i++) {
+    if (compiledList[i].reg.test(upperAddr)) {
+      return compiledList[i].name;
     }
   }
 
@@ -1222,15 +1239,19 @@ function detectDistrict(address = "", state = "") {
 // GET /api/customer-analysis
 app.get("/api/customer-analysis", async (req, res) => {
   try {
+    const activeEmail = (req.headers["x-user-email"] || req.query.email || "").trim().toLowerCase();
     const search = (req.query.search || "").trim().toLowerCase();
     const repeatOnly = req.query.repeatOnly === "true";
     const selectedState = (req.query.state || "").trim();
     const selectedDistrict = (req.query.district || "").trim();
+    const isRefresh = req.query.refresh === "true" || req.query.force === "true";
 
-    const cacheKey = `cust_analysis_${search}_${repeatOnly}_${selectedState}_${selectedDistrict}`;
-    const cached = getCachedData(cacheKey);
-    if (cached) {
-      return res.json(cached);
+    const cacheKey = `cust_analysis_${activeEmail}_${search}_${repeatOnly}_${selectedState}_${selectedDistrict}`;
+    if (!isRefresh) {
+      const cached = getCachedData(cacheKey);
+      if (cached) {
+        return res.json(cached);
+      }
     }
 
     const db = await getDb();
@@ -1424,7 +1445,7 @@ app.get("/api/customer-analysis", async (req, res) => {
       customers: formattedList,
     };
 
-    setCachedData(cacheKey, responseObj, 15000);
+    setCachedData(cacheKey, responseObj, DEFAULT_TTL_MS);
     res.json(responseObj);
   } catch (err) {
     console.error("Customer Analysis API Error:", err);
@@ -1438,6 +1459,7 @@ app.get("/api/customer-analysis/history", async (req, res) => {
     const db = await getDb();
     const id = req.query.id;
     if (!id) return res.status(400).json({ error: "Customer ID is required" });
+    if (!ObjectId.isValid(id)) return res.status(400).json({ error: "Invalid Customer ID format" });
 
     const customersCol = db.collection("customers");
     const customer = await customersCol.findOne({ _id: new ObjectId(id) });
@@ -1503,10 +1525,14 @@ app.get("/api/customer-analysis/history", async (req, res) => {
 // GET /api/insights/dashboard - Deep Regional Demand, SKU Matrix & Pause Product Recommendations
 app.get("/api/insights/dashboard", async (req, res) => {
   try {
-    const cacheKey = "insights_dashboard";
-    const cached = getCachedData(cacheKey);
-    if (cached) {
-      return res.json(cached);
+    const activeEmail = (req.headers["x-user-email"] || req.query.email || "").trim().toLowerCase();
+    const isRefresh = req.query.refresh === "true" || req.query.force === "true";
+    const cacheKey = `insights_dashboard_${activeEmail}`;
+    if (!isRefresh) {
+      const cached = getCachedData(cacheKey);
+      if (cached) {
+        return res.json(cached);
+      }
     }
 
     const db = await getDb();
@@ -1825,7 +1851,7 @@ app.get("/api/insights/dashboard", async (req, res) => {
       },
     };
 
-    setCachedData("insights_dashboard", responseObj, 15000);
+    setCachedData(cacheKey, responseObj, DEFAULT_TTL_MS);
     res.json(responseObj);
   } catch (err) {
     console.error("Insights Dashboard API Error:", err);
@@ -1996,10 +2022,7 @@ app.post("/api/returns/upload", upload.single("file"), async (req, res) => {
 // 2. GET /api/returns - Fetch return records with summary stats
 app.get("/api/returns", async (req, res) => {
   try {
-    const db = await getDb();
-    const returnsCol = db.collection("returns");
     const activeEmail = getUserEmail(req) || "guest";
-
     const {
       search = "",
       type = "ALL",
@@ -2008,6 +2031,18 @@ app.get("/api/returns", async (req, res) => {
       page = "1",
       limit = "25",
     } = req.query;
+
+    const isRefresh = req.query.refresh === "true" || req.query.force === "true";
+    const cacheKey = `returns_${activeEmail}_${search}_${type}_${state}_${sku}_${page}_${limit}`;
+    if (!isRefresh) {
+      const cached = getCachedData(cacheKey);
+      if (cached) {
+        return res.json(cached);
+      }
+    }
+
+    const db = await getDb();
+    const returnsCol = db.collection("returns");
 
     const pageNum = parseInt(page, 10) || 1;
     const pageSize = parseInt(limit, 10) || 25;
@@ -2134,7 +2169,7 @@ app.get("/api/returns", async (req, res) => {
       updatedAt: r.updatedAt,
     }));
 
-    res.json({
+    const returnPayload = {
       summary: {
         totalReturns,
         customerReturnsCount,
@@ -2151,7 +2186,9 @@ app.get("/api/returns", async (req, res) => {
         totalPages: Math.ceil(filteredTotal / pageSize) || 1,
       },
       returns: formattedList,
-    });
+    };
+    setCachedData(cacheKey, returnPayload);
+    res.json(returnPayload);
   } catch (err) {
     console.error("Fetch Returns API Error:", err);
     res.status(500).json({ error: err.message || "Failed to fetch returns data" });
@@ -2164,9 +2201,11 @@ app.delete("/api/returns", async (req, res) => {
     const db = await getDb();
     const id = req.query.id;
     if (!id) return res.status(400).json({ error: "Return ID is required" });
+    if (!ObjectId.isValid(id)) return res.status(400).json({ error: "Invalid Return ID format" });
 
     const returnsCol = db.collection("returns");
     await returnsCol.deleteOne({ _id: new ObjectId(id) });
+    clearAllApiCache();
     res.json({ success: true, message: "Return entry deleted successfully!" });
   } catch (err) {
     console.error("Delete Return API Error:", err);
@@ -3446,6 +3485,7 @@ app.delete("/api/templates", async (req, res) => {
 
     const id = req.query.id;
     if (!id) return res.status(400).json({ error: "Template ID is required" });
+    if (!ObjectId.isValid(id)) return res.status(400).json({ error: "Invalid Template ID format" });
 
     const db = await getDb();
     await db.collection("templates").deleteOne({
