@@ -2906,6 +2906,7 @@ app.post("/api/generate_deprecated", upload.single("pdf"), async (req, res) => {
           // 1. Send Stamped PDF to pdfReceiver
           const pdfBase64 = `data:application/pdf;base64,${Buffer.from(outBytes).toString("base64")}`;
           await sendWhatsAppMedia({
+            apiKey: req.body?.waApiKey || userSettings?.waApiKey,
             number: pdfReceiver,
             fileData: pdfBase64,
             fileName: stampedFileName,
@@ -2923,6 +2924,7 @@ app.post("/api/generate_deprecated", upload.single("pdf"), async (req, res) => {
           if (dataForSummary && dataForSummary.length > 0) {
             const summaryPngBase64 = generateSummaryCanvasImage(dataForSummary, req.file?.originalname || "labels.pdf");
             await sendWhatsAppMedia({
+              apiKey: req.body?.waApiKey || userSettings?.waApiKey,
               number: imageReceiver,
               fileData: summaryPngBase64,
               fileName: summaryFileName,
@@ -2981,6 +2983,7 @@ app.post("/api/whatsapp/dispatch-final", upload.single("pdf"), async (req, res) 
     if (req.file && req.file.buffer && req.file.buffer.length > 0) {
       const pdfBase64 = `data:application/pdf;base64,${req.file.buffer.toString("base64")}`;
       await sendWhatsAppMedia({
+        apiKey: req.body?.waApiKey || userSettings?.waApiKey,
         number: pdfReceiver,
         fileData: pdfBase64,
         fileName: stampedFileName,
@@ -2995,6 +2998,7 @@ app.post("/api/whatsapp/dispatch-final", upload.single("pdf"), async (req, res) 
       await new Promise((r) => setTimeout(r, 1000));
       const summaryPngBase64 = generateSummaryCanvasImage(pages, fileName);
       await sendWhatsAppMedia({
+        apiKey: req.body?.waApiKey || userSettings?.waApiKey,
         number: imageReceiver,
         fileData: summaryPngBase64,
         fileName: summaryFileName,
@@ -3365,6 +3369,7 @@ app.post("/api/whatsapp/send-media", async (req, res) => {
       return res.status(400).json({ error: "Missing fileData parameter" });
     }
     const result = await sendWhatsAppMedia({
+      apiKey: req.body?.waApiKey || req.body?.apiKey,
       number,
       fileData,
       fileName,

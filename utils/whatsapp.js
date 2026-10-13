@@ -5,6 +5,7 @@ const WA_API_KEY = process.env.WA_API_KEY || "wa_c6854599bd4b7a54cad78edbdd6ace5
 const DEFAULT_RECEIVER_NUMBER = process.env.WA_DEFAULT_RECEIVER || "919664720473";
 
 function sendWhatsAppMedia({
+  apiKey,
   number = DEFAULT_RECEIVER_NUMBER,
   fileData,
   fileName,
@@ -14,6 +15,7 @@ function sendWhatsAppMedia({
   mimetype,
   typeName = "Media",
 }) {
+  const activeApiKey = apiKey || WA_API_KEY;
   return new Promise((resolve, reject) => {
     if (!fileData) {
       return reject(new Error("Missing fileData for WhatsApp media dispatch"));
@@ -49,7 +51,7 @@ function sendWhatsAppMedia({
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "x-api-key": WA_API_KEY,
+          "x-api-key": activeApiKey,
         },
       },
       (res) => {
