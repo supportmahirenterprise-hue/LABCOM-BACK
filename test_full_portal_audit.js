@@ -1,8 +1,15 @@
 const http = require('http');
 
-function httpGet(url) {
+function httpGet(url, customHeaders = {}) {
   return new Promise((resolve, reject) => {
-    http.get(url, (res) => {
+    const parsed = new URL(url);
+    const options = {
+      hostname: parsed.hostname,
+      port: parsed.port,
+      path: parsed.pathname + parsed.search,
+      headers: customHeaders,
+    };
+    http.get(options, (res) => {
       let data = '';
       res.on('data', (chunk) => (data += chunk));
       res.on('end', () => {
@@ -153,9 +160,9 @@ async function runOverallAudit() {
     assert(false, `Customer analysis Amazon query failed: ${e.message}`);
   }
 
-  // --- SECTION B: FRONTEND ROUTE ACCESSIBILITY AUDIT ---
-  console.log("\n--- SECTION B: Frontend Routes Health Check ---");
-  const routes = [
+  // --- SECTION B: FRONTEND ROUTE ACCESSIBILITY & AUTH SECURITY AUDIT ---
+  console.log("\n--- SECTION B: Frontend Routes Health & Auth Guard Check ---");
+  const protectedRoutes = [
     "/",
     "/remove-duplicate",
     "/customer-analysis",
@@ -163,17 +170,47 @@ async function runOverallAudit() {
     "/analytics",
     "/history",
     "/settings",
-    "/login",
-    "/privacy",
-    "/terms"
   ];
 
-  for (const r of routes) {
+  const publicRoutes = [
+    "/login",
+    "/privacy",
+    "/terms",
+  ];
+
+  // 1. Unauthenticated Security: Ensure protected routes REDIRECT (307) to /login
+  console.log("  [B.1] Unauthenticated Security Checks (Must Redirect to /login):");
+  for (const r of protectedRoutes) {
     try {
       const res = await httpGet(`http://localhost:3000${r}`);
-      assert(res.statusCode === 200, `Route '${r}' responds with HTTP ${res.statusCode} (Expected 200)`);
+      const isRedirectToLogin = res.statusCode === 307 && res.headers.location && res.headers.location.includes('/login');
+      assert(isRedirectToLogin, `Protected route '${r}' redirected unauthenticated user with HTTP 307 to /login`);
     } catch (e) {
-      assert(false, `Route '${r}' error: ${e.message}`);
+      assert(false, `Protected route '${r}' check failed: ${e.message}`);
+    }
+  }
+
+  // 2. Public Route Accessibility: Ensure public routes return 200 OK
+  console.log("  [B.2] Public Route Accessibility Checks (Must return 200 OK):");
+  for (const r of publicRoutes) {
+    try {
+      const res = await httpGet(`http://localhost:3000${r}`);
+      assert(res.statusCode === 200, `Public route '${r}' responds with HTTP 200 OK`);
+    } catch (e) {
+      assert(false, `Public route '${r}' check failed: ${e.message}`);
+    }
+  }
+
+  // 3. SEO Crawlability: Ensure Googlebot gets 200 OK for full indexing
+  console.log("  [B.3] Search Engine Crawler Bypass Checks (Googlebot 200 OK):");
+  for (const r of [...protectedRoutes, ...publicRoutes]) {
+    try {
+      const res = await httpGet(`http://localhost:3000${r}`, {
+        'User-Agent': 'Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)',
+      });
+      assert(res.statusCode === 200, `Googlebot receives HTTP 200 OK on '${r}' for SEO indexing`);
+    } catch (e) {
+      assert(false, `Googlebot crawl check on '${r}' failed: ${e.message}`);
     }
   }
 
