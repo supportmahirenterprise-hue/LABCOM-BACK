@@ -29,8 +29,9 @@ const IN_CODE_STATE = {
 };
 
 function get(text, regex) {
+  if (!text) return "";
   const m = text.match(regex);
-  return m ? m[1].trim() : "";
+  return m && m[1] ? m[1].trim() : "";
 }
 
 function detectStateInText(text) {

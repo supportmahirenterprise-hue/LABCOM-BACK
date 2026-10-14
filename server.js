@@ -91,6 +91,14 @@ async function ensureDatabaseIndexes() {
 }
 ensureDatabaseIndexes().catch(() => {});
 
+process.on("unhandledRejection", (reason, promise) => {
+  console.error("⚠️ [GlobalServer Warning] Unhandled Rejection at Promise:", reason);
+});
+
+process.on("uncaughtException", (err) => {
+  console.error("🛑 [GlobalServer Error] Uncaught Exception:", err);
+});
+
 const app = express();
 app.use(
   cors({
@@ -641,34 +649,42 @@ async function getPerPageText(buffer, startPage = 1, endPage = null) {
 }
 
 function fillTemplate(template, data) {
+  if (!template || typeof template !== "string") return "";
+  const d = data || {};
   return template.replace(/\{(\w+)\}/g, (m, key) =>
-    data[key] !== undefined && data[key] !== null ? String(data[key]) : ""
+    d[key] !== undefined && d[key] !== null ? String(d[key]) : ""
   );
 }
 
 function parseDdMmYyyy(str) {
-  const m = (str || "").match(/(\d{2})[.\/](\d{2})[.\/](\d{4})/);
+  const m = String(str || "").match(/(\d{2})[.\/](\d{2})[.\/](\d{4})/);
   if (!m) return 0;
-  return new Date(`${m[3]}-${m[2]}-${m[1]}`).getTime();
+  const ts = new Date(`${m[3]}-${m[2]}-${m[1]}`).getTime();
+  return isNaN(ts) ? 0 : ts;
 }
 
 function cleanWinAnsi(str) {
   if (!str) return "";
-  return str.trim();
+  return String(str).trim();
 }
 
 function getTextWidthSafe(font, text, fontSize) {
+  if (!text) return 0;
+  const str = String(text);
+  const size = Number(fontSize) || 10;
   try {
-    const asciiEquivalent = text.replace(/[^\x00-\x7F]/g, "A");
-    return font.widthOfTextAtSize(asciiEquivalent, fontSize);
+    const asciiEquivalent = str.replace(/[^\x00-\x7F]/g, "A");
+    return font && typeof font.widthOfTextAtSize === "function"
+      ? font.widthOfTextAtSize(asciiEquivalent, size)
+      : str.length * size * 0.6;
   } catch (e) {
-    return text.length * fontSize * 0.6;
+    return str.length * size * 0.6;
   }
 }
 
 function wrapText(text, maxWidth, font, fontSize) {
   if (!text) return [];
-  const rawLines = text.split("\n");
+  const rawLines = String(text).split("\n");
   const wrappedLines = [];
 
   for (const rawLine of rawLines) {
@@ -739,8 +755,8 @@ const DEFAULT_TEMPLATES = [
     name: "Meesho Store Follower Booster",
     description: "Encodes Meesho store page with Order No & SKU to grow followers and repeat orders.",
     enableQr: true,
-    qrText: "https://www.meesho.com/themahirenterprise",
-    detailText: "Scan to Follow Meesho Store!\nOrder: {orderNo}\nSKU: {sku}",
+    qrText: "https://www.meesho.com",
+    detailText: "Scan to Follow our Store!\nOrder: {orderNo}\nSKU: {sku}",
     qrX: 30,
     qrY: 30,
     qrSize: 90,
@@ -752,8 +768,8 @@ const DEFAULT_TEMPLATES = [
     name: "Instagram Direct QR Stamp",
     description: "Directs customers to Instagram profile to claim warranty or discount coupons.",
     enableQr: true,
-    qrText: "https://instagram.com/mahir.enterprise_",
-    detailText: "Scan to Follow on Instagram!\n@mahir.enterprise_\nSKU: {sku}",
+    qrText: "https://instagram.com",
+    detailText: "Scan to Follow on Instagram!\nSKU: {sku}",
     qrX: 95,
     qrY: 30,
     qrSize: 85,
@@ -778,14 +794,17 @@ const DEFAULT_TEMPLATES = [
 
 // ---- CUSTOMER DB SAVE & ANALYSIS ENGINE ----------------------------------
 
-async function saveCustomerOrders(fields, userEmail = "guest") {
+async function saveCustomerOrders(fields, userEmail) {
   if (!Array.isArray(fields) || fields.length === 0) return;
+  const activeEmail = (userEmail || "").toLowerCase().trim();
+  if (!activeEmail || activeEmail === "guest") {
+    // Zero-Leakage: Never save customer PII under unauthenticated guest accounts
+    return;
+  }
   try {
     const db = await getDb();
     const customersCol = db.collection("customers");
     const ordersCol = db.collection("orders");
-
-    const activeEmail = (userEmail || "guest").toLowerCase().trim();
 
     // 1. Prepare items
     const validItems = [];
@@ -843,9 +862,12 @@ async function saveCustomerOrders(fields, userEmail = "guest") {
 
     if (validItems.length === 0) return;
 
-    // 2. Batch fetch existing orders & customers
+    // 2. Batch fetch existing orders & customers strictly for this authenticated seller
     const existingOrdersArray = orderNos.size > 0
-      ? await ordersCol.find({ $or: [{ orderNo: { $in: Array.from(orderNos) } }, { subOrderNo: { $in: Array.from(orderNos) } }] }).toArray()
+      ? await ordersCol.find({
+          userEmail: activeEmail,
+          $or: [{ orderNo: { $in: Array.from(orderNos) } }, { subOrderNo: { $in: Array.from(orderNos) } }],
+        }).toArray()
       : [];
     const existingOrderSet = new Set();
     existingOrdersArray.forEach(o => {
@@ -854,7 +876,10 @@ async function saveCustomerOrders(fields, userEmail = "guest") {
     });
 
     const existingCustomersArray = custKeys.size > 0
-      ? await customersCol.find({ custKey: { $in: Array.from(custKeys) } }).toArray()
+      ? await customersCol.find({
+          userEmail: activeEmail,
+          custKey: { $in: Array.from(custKeys) },
+        }).toArray()
       : [];
     const customerMap = new Map();
     existingCustomersArray.forEach(c => customerMap.set(c.custKey, c));
@@ -958,7 +983,7 @@ async function saveCustomerOrders(fields, userEmail = "guest") {
       if (custData._id) {
         customerOps.push({
           updateOne: {
-            filter: { _id: custData._id },
+            filter: { _id: custData._id, userEmail: activeEmail },
             update: {
               $set: {
                 name: custData.name,
@@ -1253,13 +1278,45 @@ function detectDistrict(address = "", state = "") {
 // GET /api/customer-analysis
 app.get("/api/customer-analysis", async (req, res) => {
   try {
-    const activeEmail = (req.headers["x-user-email"] || req.query.email || "").trim().toLowerCase();
+    const activeEmail = getUserEmail(req);
     const search = (req.query.search || "").trim().toLowerCase();
     const repeatOnly = req.query.repeatOnly === "true";
     const selectedState = (req.query.state || "").trim();
     const selectedDistrict = (req.query.district || "").trim();
     const selectedPlatform = (req.query.platform || "ALL").trim().toLowerCase();
     const isRefresh = req.query.refresh === "true" || req.query.force === "true";
+
+    // Multi-tenant privacy guard: If not logged in, return empty summary (do not leak other users' data)
+    if (!activeEmail) {
+      return res.json({
+        summary: {
+          selectedPlatform,
+          totalCustomers: 0,
+          totalUniqueBuyers: 0,
+          repeatBuyersCount: 0,
+          repeatCustomersCount: 0,
+          repeatRetentionRate: "0.0%",
+          repeatRate: "0.0%",
+          totalOrdersCount: 0,
+          totalOrdersProcessed: 0,
+          totalOrdersAll: 0,
+          totalOrdersForSelectedState: 0,
+          meeshoCustomersCount: 0,
+          flipkartCustomersCount: 0,
+          amazonCustomersCount: 0,
+          totalStatesCount: 0,
+          totalDistrictsCount: 0,
+          allStates: [],
+          allDistricts: [],
+          allStatesWithCounts: [],
+          allDistrictsWithCounts: [],
+          topDistricts: [],
+          highDemandStates: [],
+          emergingDistricts: [],
+        },
+        customers: [],
+      });
+    }
 
     const cacheKey = `cust_analysis_${activeEmail}_${search}_${repeatOnly}_${selectedState}_${selectedDistrict}_${selectedPlatform}`;
     if (!isRefresh) {
@@ -1274,10 +1331,12 @@ app.get("/api/customer-analysis", async (req, res) => {
     const returnsCol1 = db.collection("return_entries");
     const returnsCol2 = db.collection("returns");
 
+    const userFilter = { userEmail: activeEmail };
+
     const [allCustomers, returnEntries1, returnEntries2] = await Promise.all([
-      customersCol.find({}).sort({ orderCount: -1, updatedAt: -1 }).toArray(),
-      returnsCol1.find({}).toArray(),
-      returnsCol2.find({}).toArray(),
+      customersCol.find(userFilter).sort({ orderCount: -1, updatedAt: -1 }).toArray(),
+      returnsCol1.find(userFilter).toArray(),
+      returnsCol2.find(userFilter).toArray(),
     ]);
 
     const returnLookup = {};
@@ -1495,9 +1554,13 @@ app.get("/api/customer-analysis", async (req, res) => {
     const responseObj = {
       summary: {
         totalCustomers,
+        totalUniqueBuyers: totalCustomers,
+        repeatBuyersCount: repeatCustomersCount,
         repeatCustomersCount,
         repeatRate,
+        repeatRetentionRate: `${repeatRate}%`,
         totalOrdersProcessed,
+        totalOrdersCount: totalOrdersProcessed,
         totalOrdersAll,
         totalOrdersForSelectedState,
         meeshoCustomersCount: meeshoCount,
@@ -1521,20 +1584,26 @@ app.get("/api/customer-analysis", async (req, res) => {
 // GET /api/customer-analysis/history
 app.get("/api/customer-analysis/history", async (req, res) => {
   try {
+    const activeEmail = getUserEmail(req);
+    if (!activeEmail) {
+      return res.status(401).json({ error: "Unauthorized / Missing user email", customer: null, orders: [] });
+    }
+
     const db = await getDb();
     const id = req.query.id;
     if (!id) return res.status(400).json({ error: "Customer ID is required" });
     if (!ObjectId.isValid(id)) return res.status(400).json({ error: "Invalid Customer ID format" });
 
     const customersCol = db.collection("customers");
-    const customer = await customersCol.findOne({ _id: new ObjectId(id) });
-    if (!customer) return res.status(404).json({ error: "Customer not found" });
+    const customer = await customersCol.findOne({ _id: new ObjectId(id), userEmail: activeEmail });
+    if (!customer) return res.status(404).json({ error: "Customer not found", customer: null, orders: [] });
 
     const returnsCol1 = db.collection("return_entries");
     const returnsCol2 = db.collection("returns");
+    const returnQuery = activeEmail ? { userEmail: activeEmail } : { userEmail: "__NONE__" };
     const [returnEntries1, returnEntries2] = await Promise.all([
-      returnsCol1.find({}).toArray(),
-      returnsCol2.find({}).toArray(),
+      returnsCol1.find(returnQuery).toArray(),
+      returnsCol2.find(returnQuery).toArray(),
     ]);
 
     const returnLookup = {};
@@ -1590,8 +1659,39 @@ app.get("/api/customer-analysis/history", async (req, res) => {
 // GET /api/insights/dashboard - Deep Regional Demand, SKU Matrix & Pause Product Recommendations
 app.get("/api/insights/dashboard", async (req, res) => {
   try {
-    const activeEmail = (req.headers["x-user-email"] || req.query.email || "").trim().toLowerCase();
+    const activeEmail = getUserEmail(req);
     const isRefresh = req.query.refresh === "true" || req.query.force === "true";
+
+    // Multi-tenant privacy guard: If not logged in, return empty insights (do not leak other users' data)
+    if (!activeEmail) {
+      return res.json({
+        totalOrders: 0,
+        totalReturns: 0,
+        totalCustomers: 0,
+        totalScans: 0,
+        summary: {
+          totalSkusTracked: 0,
+          totalPausedProducts: 0,
+          totalWinnerProducts: 0,
+          totalHighVolumeDistricts: 0,
+          totalOrders: 0,
+          totalReturns: 0,
+          totalCustomers: 0,
+          totalScans: 0,
+        },
+        actionCards: [],
+        skuPerformanceMatrix: [],
+        criticalReturnProducts: [],
+        topBestsellingSkus: [],
+        highGrowthDistricts: [],
+        districtIntelligence: {
+          highVolume: [],
+          highGrowthPotential: [],
+          highRiskRegions: [],
+        },
+      });
+    }
+
     const cacheKey = `insights_dashboard_${activeEmail}`;
     if (!isRefresh) {
       const cached = getCachedData(cacheKey);
@@ -1606,11 +1706,14 @@ app.get("/api/insights/dashboard", async (req, res) => {
     const returnsCol2 = db.collection("returns");
     const scansCol = db.collection("qr_scans");
 
+    const userFilter = { userEmail: activeEmail };
+    const scanFilter = { sellerEmail: activeEmail };
+
     const [allCustomers, allReturns1, allReturns2, allScans] = await Promise.all([
-      customersCol.find({}).toArray(),
-      returnsCol.find({}).toArray(),
-      returnsCol2.find({}).toArray(),
-      scansCol.find({}).toArray(),
+      customersCol.find(userFilter).toArray(),
+      returnsCol.find(userFilter).toArray(),
+      returnsCol2.find(userFilter).toArray(),
+      scansCol.find(scanFilter).toArray(),
     ]);
 
     const allReturns = [...allReturns1, ...allReturns2];
@@ -1676,36 +1779,7 @@ app.get("/api/insights/dashboard", async (req, res) => {
       }
     });
 
-    // Default Fallback SKUs for initial demonstration if database is empty
-    if (Object.keys(skuOrderMap).length === 0) {
-      const popatKey = normalizeSkuKey("COLORIYO_POPAT_4");
-      skuDisplayNameMap[popatKey] = "COLORIYO_POPAT_4";
-      skuOrderMap[popatKey] = 48;
-      skuReturnMap[popatKey] = 18;
-      skuRtoCountMap[popatKey] = 12;
-      skuCustomerReturnMap[popatKey] = 6;
 
-      const vlvKey = normalizeSkuKey("8mVLVegK");
-      skuDisplayNameMap[vlvKey] = "8mVLVegK";
-      skuOrderMap[vlvKey] = 82;
-      skuReturnMap[vlvKey] = 4;
-      skuRtoCountMap[vlvKey] = 3;
-      skuCustomerReturnMap[vlvKey] = 1;
-
-      const kuvaKey = normalizeSkuKey("kaka_kuva_4_pieces");
-      skuDisplayNameMap[kuvaKey] = "kaka_kuva_4_pieces";
-      skuOrderMap[kuvaKey] = 34;
-      skuReturnMap[kuvaKey] = 9;
-      skuRtoCountMap[kuvaKey] = 6;
-      skuCustomerReturnMap[kuvaKey] = 3;
-
-      const lavenderKey = normalizeSkuKey("Lovender_Gote_7_piece");
-      skuDisplayNameMap[lavenderKey] = "Lovender_Gote_7_piece";
-      skuOrderMap[lavenderKey] = 56;
-      skuReturnMap[lavenderKey] = 2;
-      skuRtoCountMap[lavenderKey] = 1;
-      skuCustomerReturnMap[lavenderKey] = 1;
-    }
 
     const skuPerformanceMatrix = Object.keys(skuOrderMap).map((normKey) => {
       const sku = skuDisplayNameMap[normKey] || normKey;
@@ -1813,17 +1887,7 @@ app.get("/api/insights/dashboard", async (req, res) => {
       }
     });
 
-    // Fallback District Data if empty
-    if (Object.keys(districtStatsMap).length === 0) {
-      districtStatsMap["Bengaluru"] = { district: "Bengaluru", state: "Karnataka", orders: 142, returns: 4 };
-      districtStatsMap["Hyderabad"] = { district: "Hyderabad", state: "Telangana", orders: 98, returns: 3 };
-      districtStatsMap["Chennai"] = { district: "Chennai", state: "Tamil Nadu", orders: 84, returns: 2 };
-      districtStatsMap["Surat"] = { district: "Surat", state: "Gujarat", orders: 65, returns: 1 };
-      districtStatsMap["Jaipur"] = { district: "Jaipur", state: "Rajasthan", orders: 52, returns: 1 };
-      districtStatsMap["Lucknow"] = { district: "Lucknow", state: "Uttar Pradesh", orders: 46, returns: 14 };
-      districtStatsMap["Patna"] = { district: "Patna", state: "Bihar", orders: 38, returns: 12 };
-      districtStatsMap["Indore"] = { district: "Indore", state: "Madhya Pradesh", orders: 31, returns: 2 };
-    }
+
 
     const processedDistricts = Object.values(districtStatsMap).map((d) => {
       const returnRate = d.orders > 0 ? Number(((d.returns / d.orders) * 100).toFixed(1)) : 0;
@@ -1900,15 +1964,26 @@ app.get("/api/insights/dashboard", async (req, res) => {
       }
     ];
 
+    const totalOrdersCount = Object.values(skuOrderMap).reduce((a, b) => a + b, 0);
     const responseObj = {
+      totalOrders: totalOrdersCount,
+      totalReturns: allReturns.length,
+      totalCustomers: allCustomers.length,
+      totalScans: allScans.length,
       summary: {
         totalSkusTracked: skuPerformanceMatrix.length,
         totalPausedProducts: pausedProducts.length,
         totalWinnerProducts: winnerProducts.length,
         totalHighVolumeDistricts: topHighVolumeDistricts.length,
+        totalOrders: totalOrdersCount,
+        totalReturns: allReturns.length,
+        totalCustomers: allCustomers.length,
+        totalScans: allScans.length,
       },
       actionCards,
       skuPerformanceMatrix,
+      criticalReturnProducts: pausedProducts,
+      topBestsellingSkus: winnerProducts,
       districtIntelligence: {
         highVolume: topHighVolumeDistricts,
         highGrowthPotential: highGrowthPotentialDistricts,
@@ -1940,7 +2015,10 @@ app.post("/api/returns/upload", upload.single("file"), async (req, res) => {
       return res.status(400).json({ error: "No valid rows found in the CSV file" });
     }
 
-    const activeEmail = getUserEmail(req) || "guest";
+    const activeEmail = getUserEmail(req);
+    if (!activeEmail || activeEmail === "guest") {
+      return res.status(401).json({ error: "Unauthorized. Please log in to import return records." });
+    }
     const db = await getDb();
     const returnsCol = db.collection("returns");
     const ordersCol = db.collection("orders");
@@ -2010,9 +2088,10 @@ app.post("/api/returns/upload", upload.single("file"), async (req, res) => {
       return res.status(400).json({ error: "No valid return records extracted from CSV" });
     }
 
-    // Cross-match with existing DB orders to enrich customer name, address, state, mobile
-    const existingOrders = orderNos.size > 0
+    // Cross-match with existing DB orders strictly for this authenticated seller
+    const existingOrders = (orderNos.size > 0 || subOrderNos.size > 0)
       ? await ordersCol.find({
+          userEmail: activeEmail,
           $or: [
             { subOrderNo: { $in: Array.from(subOrderNos) } },
             { orderNo: { $in: Array.from(orderNos) } },
@@ -2087,7 +2166,7 @@ app.post("/api/returns/upload", upload.single("file"), async (req, res) => {
 // 2. GET /api/returns - Fetch return records with summary stats
 app.get("/api/returns", async (req, res) => {
   try {
-    const activeEmail = getUserEmail(req) || "guest";
+    const activeEmail = getUserEmail(req);
     const {
       search = "",
       type = "ALL",
@@ -2096,6 +2175,29 @@ app.get("/api/returns", async (req, res) => {
       page = "1",
       limit = "25",
     } = req.query;
+
+    if (!activeEmail) {
+      return res.json({
+        returns: [],
+        pagination: { total: 0, page: 1, limit: 25, totalPages: 0 },
+        summary: {
+          total: 0,
+          totalReturns: 0,
+          customerReturns: 0,
+          customerReturnsCount: 0,
+          rtos: 0,
+          rtoCount: 0,
+          topSku: null,
+          topReturnedSku: null,
+          topReason: null,
+          topReturnReason: null,
+          topState: null,
+          topReturnState: null,
+          allSkus: [],
+          allSkusWithCounts: [],
+        },
+      });
+    }
 
     const isRefresh = req.query.refresh === "true" || req.query.force === "true";
     const cacheKey = `returns_${activeEmail}_${search}_${type}_${state}_${sku}_${page}_${limit}`;
@@ -2236,12 +2338,19 @@ app.get("/api/returns", async (req, res) => {
 
     const returnPayload = {
       summary: {
+        total: totalReturns,
         totalReturns,
+        customerReturns: customerReturnsCount,
         customerReturnsCount,
+        rtos: rtoCount,
         rtoCount,
+        topSku: topSkuEntry ? { name: topSkuEntry.name, count: topSkuEntry.count } : null,
         topReturnedSku: topSkuEntry ? { name: topSkuEntry.name, count: topSkuEntry.count } : null,
+        topReason: topReasonEntry ? { name: topReasonEntry[0], count: topReasonEntry[1] } : null,
         topReturnReason: topReasonEntry ? { name: topReasonEntry[0], count: topReasonEntry[1] } : null,
+        topState: topStateEntry ? { name: topStateEntry[0], count: topStateEntry[1] } : null,
         topReturnState: topStateEntry ? { name: topStateEntry[0], count: topStateEntry[1] } : null,
+        allSkus: allSkusWithCounts || [],
         allSkusWithCounts: allSkusWithCounts || [],
       },
       pagination: {
@@ -2263,14 +2372,25 @@ app.get("/api/returns", async (req, res) => {
 // 3. DELETE /api/returns - Delete a return record by ID
 app.delete("/api/returns", async (req, res) => {
   try {
+    const activeEmail = getUserEmail(req);
+    if (!activeEmail) {
+      return res.status(401).json({ error: "Unauthorized / Missing user email" });
+    }
+
     const db = await getDb();
     const id = req.query.id;
     if (!id) return res.status(400).json({ error: "Return ID is required" });
     if (!ObjectId.isValid(id)) return res.status(400).json({ error: "Invalid Return ID format" });
 
     const returnsCol = db.collection("returns");
-    await returnsCol.deleteOne({ _id: new ObjectId(id) });
+    const result = await returnsCol.deleteOne({
+      _id: new ObjectId(id),
+      userEmail: activeEmail,
+    });
     clearAllApiCache();
+    if (result.deletedCount === 0) {
+      return res.status(404).json({ error: "Return entry not found or unauthorized to delete" });
+    }
     res.json({ success: true, message: "Return entry deleted successfully!" });
   } catch (err) {
     console.error("Delete Return API Error:", err);
@@ -2303,10 +2423,11 @@ function isValidOrderNo(ord) {
 
 async function checkReturnHistoryForPages(fields, userEmail) {
   if (!Array.isArray(fields) || fields.length === 0) return [];
+  const activeEmail = (userEmail || "").toLowerCase().trim();
+  if (!activeEmail || activeEmail === "guest") return [];
   try {
     const db = await getDb();
     const returnsCol = db.collection("returns");
-    const activeEmail = userEmail || "guest";
 
     const allUserReturns = await returnsCol.find({ userEmail: activeEmail }).toArray();
     if (allUserReturns.length === 0) return [];
@@ -2427,11 +2548,12 @@ async function checkReturnHistoryForPages(fields, userEmail) {
 
 async function checkDuplicateOrdersForPages(fields, userEmail) {
   if (!Array.isArray(fields) || fields.length === 0) return [];
+  const activeEmail = (userEmail || "").toLowerCase().trim();
+  if (!activeEmail || activeEmail === "guest") return [];
   try {
     const db = await getDb();
     const ordersCol = db.collection("orders");
     const returnsCol = db.collection("returns");
-    const activeEmail = userEmail || "guest";
 
     const orderNos = new Set();
     fields.forEach((f) => {
@@ -2611,6 +2733,7 @@ app.post("/api/preview", upload.single("pdf"), async (req, res) => {
 
     // Check past return history for extracted label pages
     const returnWarnings = await checkReturnHistoryForPages(fields, getUserEmail(req));
+    const duplicateOrderWarnings = await checkDuplicateOrdersForPages(fields, getUserEmail(req));
 
     // Calculate platform counts & detect mixed uploads
     const platformCounts = { meesho: 0, flipkart: 0, amazon: 0 };
@@ -2965,6 +3088,10 @@ app.post("/api/whatsapp/dispatch-final", upload.single("pdf"), async (req, res) 
 
     const pdfReceiver = req.body?.pdfReceiverNumber || req.body?.whatsappNumber || userSettings?.pdfReceiverNumber || userSettings?.waReceiverNumber || userSettings?.phone || DEFAULT_RECEIVER_NUMBER;
     const imageReceiver = req.body?.imageReceiverNumber || req.body?.whatsappNumber || userSettings?.imageReceiverNumber || userSettings?.waReceiverNumber || userSettings?.phone || DEFAULT_RECEIVER_NUMBER;
+
+    if (!pdfReceiver && !imageReceiver) {
+      return res.status(400).json({ error: "Receiver WhatsApp number is required to dispatch labels. Please configure a valid WhatsApp number." });
+    }
 
     const fileName = req.body?.fileName || "labels.pdf";
     let pages = [];
@@ -3360,11 +3487,20 @@ app.post("/api/whatsapp/send-media", async (req, res) => {
   try {
     const email = getUserEmail(req);
     const internalSecret = req.headers["x-internal-secret"];
-    if (!email && internalSecret !== "core-engine-internal") {
+    const isInternal = Boolean(
+      internalSecret &&
+      ((process.env.INTERNAL_API_SECRET && internalSecret === process.env.INTERNAL_API_SECRET) ||
+       internalSecret === "core-engine-internal")
+    );
+
+    if (!email && !isInternal) {
       return res.status(401).json({ error: "Unauthorized / Authentication required to access WhatsApp API" });
     }
 
-    const { number = DEFAULT_RECEIVER_NUMBER, fileData, typeName = "Media", fileName, caption, mimeType } = req.body;
+    const { number, fileData, typeName = "Media", fileName, caption, mimeType } = req.body || {};
+    if (!number || String(number).trim().replace(/\D/g, "").length < 10) {
+      return res.status(400).json({ error: "Valid receiver WhatsApp number is required" });
+    }
     if (!fileData) {
       return res.status(400).json({ error: "Missing fileData parameter" });
     }
@@ -3534,7 +3670,7 @@ app.post("/api/templates", async (req, res) => {
       name: name.trim(),
       description: description || "",
       enableQr: Boolean(enableQr),
-      qrText: qrText || "https://www.meesho.com/themahirenterprise",
+      qrText: qrText || "",
       detailText: detailText || "",
       qrX: parseFloat(qrX) || 12,
       qrY: parseFloat(qrY) || 10,
@@ -3552,7 +3688,7 @@ app.post("/api/templates", async (req, res) => {
       name: name.trim(),
       description: description || "",
       enableQr: Boolean(enableQr),
-      qrText: qrText || "https://www.meesho.com/themahirenterprise",
+      qrText: qrText || "",
       detailText: detailText || "",
       qrX: parseFloat(qrX) || 12,
       qrY: parseFloat(qrY) || 10,
@@ -3750,9 +3886,9 @@ app.post("/api/analytics", async (req, res) => {
 
     await db.collection("qr_scans").insertOne({
       sellerEmail: email,
-      orderNo: orderNo || "OD-398241029_1",
-      sku: sku || "SAMPLE-SKU-COTTON-SHIRT",
-      targetUrl: targetUrl || "https://www.meesho.com/themahirenterprise",
+      orderNo: orderNo || "OD-BATCH-ORDER",
+      sku: sku || "GENERAL-SKU",
+      targetUrl: targetUrl || "",
       isMobile: true,
       userAgent: req.headers["user-agent"] || "Test Agent",
       createdAt: now,
@@ -3770,15 +3906,16 @@ app.post("/api/analytics", async (req, res) => {
 app.get("/r/:code", async (req, res) => {
   try {
     const code = req.params.code;
+    const defaultSiteUrl = process.env.FRONTEND_URL || "https://labelpro.in";
     if (!code) {
-      return res.redirect(process.env.FRONTEND_URL || "http://localhost:3000");
+      return res.redirect(defaultSiteUrl);
     }
 
     const db = await getDb();
     let track = await db.collection("qr_tracks").findOne({ code });
 
-    let targetUrl = "https://www.meesho.com/themahirenterprise";
-    let sellerEmail = "vishal.nexios@gmail.com";
+    let targetUrl = defaultSiteUrl;
+    let sellerEmail = "";
     let orderNo = "DIRECT_SCAN";
     let sku = "GENERAL";
 
@@ -3883,12 +4020,24 @@ app.post("/api/contact", async (req, res) => {
   }
 });
 
-// GET /api/contact - Retrieve inquiries (for support dashboard / admin inspection)
+// GET /api/contact - Retrieve inquiries strictly scoped to user or internal admin
 app.get("/api/contact", async (req, res) => {
   try {
+    const email = getUserEmail(req);
+    const internalSecret = req.headers["x-internal-secret"];
+    const isInternal = Boolean(
+      internalSecret &&
+      process.env.INTERNAL_API_SECRET &&
+      internalSecret === process.env.INTERNAL_API_SECRET
+    );
+
+    if (!email && !isInternal) {
+      return res.status(401).json({ error: "Unauthorized / Missing user email", inquiries: [] });
+    }
+
     const db = await getDb();
-    const { email, limit = 50 } = req.query;
-    const filter = email ? { email: String(email).toLowerCase() } : {};
+    const { limit = 50 } = req.query;
+    const filter = isInternal && !email ? {} : { email };
     const inquiries = await db
       .collection("contact_inquiries")
       .find(filter)

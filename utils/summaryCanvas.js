@@ -1,11 +1,13 @@
 const { createCanvas } = require("@napi-rs/canvas");
 
 function generateSummaryCanvasImage(pagesData, sourceFileName = "labels.pdf") {
+  const pages = Array.isArray(pagesData) ? pagesData : [];
   const skuMap = {};
   let totalQtySum = 0;
   const multiQtyOrders = [];
 
-  pagesData.forEach((item, idx) => {
+  pages.forEach((item, idx) => {
+    if (!item) return;
     const sku = (item.sku || "UNSPECIFIED_SKU").trim();
     const qtyVal = parseInt(item.qty, 10) || 1;
     totalQtySum += qtyVal;
@@ -29,7 +31,7 @@ function generateSummaryCanvasImage(pagesData, sourceFileName = "labels.pdf") {
   });
 
   const skuList = Object.values(skuMap).sort((a, b) => b.totalQty - a.totalQty);
-  const totalLabels = pagesData.length;
+  const totalLabels = pages.length;
   const totalSkus = skuList.length;
   const totalMultiQty = multiQtyOrders.length;
 

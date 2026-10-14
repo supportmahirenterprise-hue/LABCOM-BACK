@@ -125,20 +125,30 @@ async function runOverallAudit() {
   }
 
   try {
-    const custAll = await httpGet("http://localhost:5001/api/customer-analysis?platform=ALL");
-    assert(custAll.statusCode === 200, "GET /api/customer-analysis?platform=ALL returns 200 OK");
-    const jsonAll = JSON.parse(custAll.data);
-    assert(jsonAll.summary !== undefined, "Summary object exists in customer analysis");
-    assert(typeof jsonAll.summary.meeshoCustomersCount === 'number', "meeshoCustomersCount is a number");
-    assert(typeof jsonAll.summary.flipkartCustomersCount === 'number', "flipkartCustomersCount is a number");
-    assert(typeof jsonAll.summary.amazonCustomersCount === 'number', "amazonCustomersCount is a number");
-    console.log(`    -> Breakdown: Meesho: ${jsonAll.summary.meeshoCustomersCount}, Flipkart: ${jsonAll.summary.flipkartCustomersCount}, Amazon: ${jsonAll.summary.amazonCustomersCount}`);
+    const custAnon = await httpGet("http://localhost:5001/api/customer-analysis?platform=ALL");
+    assert(custAnon.statusCode === 200, "Anonymous GET /api/customer-analysis returns 200 OK");
+    const jsonAnon = JSON.parse(custAnon.data);
+    assert(jsonAnon.summary !== undefined, "Summary object exists in anonymous customer analysis");
+    assert(jsonAnon.summary.totalUniqueBuyers === 0, "Anonymous user receives 0 buyers (Zero-Leakage Security PASS)");
+    assert(jsonAnon.customers.length === 0, "Anonymous customer list is strictly empty (Zero-Leakage PASS)");
   } catch (e) {
-    assert(false, `Customer analysis ALL query failed: ${e.message}`);
+    assert(false, `Anonymous customer query failed: ${e.message}`);
   }
 
   try {
-    const custMeesho = await httpGet("http://localhost:5001/api/customer-analysis?platform=meesho");
+    const custAuth = await httpGet("http://localhost:5001/api/customer-analysis?platform=ALL&email=vishal.nexios@gmail.com");
+    assert(custAuth.statusCode === 200, "GET /api/customer-analysis?email=... returns 200 OK");
+    const jsonAuth = JSON.parse(custAuth.data);
+    assert(typeof jsonAuth.summary.meeshoCustomersCount === 'number', "meeshoCustomersCount is a number");
+    assert(typeof jsonAuth.summary.flipkartCustomersCount === 'number', "flipkartCustomersCount is a number");
+    assert(typeof jsonAuth.summary.amazonCustomersCount === 'number', "amazonCustomersCount is a number");
+    console.log(`    -> Breakdown: Meesho: ${jsonAuth.summary.meeshoCustomersCount}, Flipkart: ${jsonAuth.summary.flipkartCustomersCount}, Amazon: ${jsonAuth.summary.amazonCustomersCount}`);
+  } catch (e) {
+    assert(false, `Customer analysis query failed: ${e.message}`);
+  }
+
+  try {
+    const custMeesho = await httpGet("http://localhost:5001/api/customer-analysis?platform=meesho&email=vishal.nexios@gmail.com");
     assert(custMeesho.statusCode === 200, "GET /api/customer-analysis?platform=meesho returns 200 OK");
     const jsonMeesho = JSON.parse(custMeesho.data);
     assert(jsonMeesho.summary.selectedPlatform.toLowerCase() === "meesho", "Selected platform is meesho");
@@ -147,14 +157,14 @@ async function runOverallAudit() {
   }
 
   try {
-    const custFlipkart = await httpGet("http://localhost:5001/api/customer-analysis?platform=flipkart");
+    const custFlipkart = await httpGet("http://localhost:5001/api/customer-analysis?platform=flipkart&email=vishal.nexios@gmail.com");
     assert(custFlipkart.statusCode === 200, "GET /api/customer-analysis?platform=flipkart returns 200 OK");
   } catch (e) {
     assert(false, `Customer analysis Flipkart query failed: ${e.message}`);
   }
 
   try {
-    const custAmazon = await httpGet("http://localhost:5001/api/customer-analysis?platform=amazon");
+    const custAmazon = await httpGet("http://localhost:5001/api/customer-analysis?platform=amazon&email=vishal.nexios@gmail.com");
     assert(custAmazon.statusCode === 200, "GET /api/customer-analysis?platform=amazon returns 200 OK");
   } catch (e) {
     assert(false, `Customer analysis Amazon query failed: ${e.message}`);
