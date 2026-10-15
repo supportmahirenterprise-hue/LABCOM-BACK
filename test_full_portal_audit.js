@@ -173,16 +173,17 @@ async function runOverallAudit() {
   // --- SECTION B: FRONTEND ROUTE ACCESSIBILITY & AUTH SECURITY AUDIT ---
   console.log("\n--- SECTION B: Frontend Routes Health & Auth Guard Check ---");
   const protectedRoutes = [
-    "/",
-    "/remove-duplicate",
     "/customer-analysis",
     "/returns",
     "/analytics",
     "/history",
     "/settings",
+    "/admin",
   ];
 
   const publicRoutes = [
+    "/",
+    "/remove-duplicate",
     "/login",
     "/privacy",
     "/terms",
