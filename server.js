@@ -3528,6 +3528,10 @@ app.get("/api/user/settings", async (req, res) => {
     const email = getUserEmail(req);
     if (!email) return res.status(401).json({ error: "Unauthorized / Missing user email" });
 
+    if (await isAccountSuspended(email)) {
+      return res.status(403).json({ error: "Your account has been suspended by administrator. Please contact support." });
+    }
+
     const db = await getDb();
     const settings = await db.collection("user_settings").findOne({ email });
     res.json({ settings: settings || null });
@@ -3541,6 +3545,10 @@ app.post("/api/user/settings", async (req, res) => {
   try {
     const email = getUserEmail(req);
     if (!email) return res.status(401).json({ error: "Unauthorized / Missing user email" });
+
+    if (await isAccountSuspended(email)) {
+      return res.status(403).json({ error: "Your account has been suspended by administrator. Please contact support." });
+    }
 
     const allowedFields = [
       "storeName",
@@ -4049,6 +4057,418 @@ app.get("/api/contact", async (req, res) => {
   } catch (err) {
     console.error("[ContactInquiriesFetchError]", err);
     return res.status(500).json({ error: "Failed to fetch contact inquiries." });
+  }
+});
+
+// ---- SUPERADMIN COMMAND CENTER & USER MANAGEMENT -------------------------
+const SUPERADMIN_EMAILS = ["vishal.nexios@gmail.com"];
+
+function isSuperAdminUser(email) {
+  if (!email || typeof email !== "string") return false;
+  return SUPERADMIN_EMAILS.includes(email.toLowerCase().trim());
+}
+
+async function isAccountSuspended(email) {
+  if (!email) return false;
+  const clean = email.toLowerCase().trim();
+  if (isSuperAdminUser(clean)) return false;
+  try {
+    const db = await getDb();
+    const user = await db.collection("users").findOne({ email: clean });
+    if (user && user.isBlocked === true) return true;
+    const settings = await db.collection("user_settings").findOne({ email: clean });
+    if (settings && settings.isBlocked === true) return true;
+  } catch (e) {}
+  return false;
+}
+
+// 1. GET /api/admin/stats - SuperAdmin platform metrics
+app.get("/api/admin/stats", async (req, res) => {
+  try {
+    const activeEmail = getUserEmail(req);
+    if (!isSuperAdminUser(activeEmail)) {
+      return res.status(403).json({ error: "Access Denied: SuperAdmin privileges required." });
+    }
+
+    const db = await getDb();
+    const [
+      usersList,
+      userSettingsList,
+      totalCustomers,
+      totalReturns1,
+      totalReturns2,
+      totalOrders,
+      totalScans,
+      totalTemplates,
+    ] = await Promise.all([
+      db.collection("users").find({}).toArray(),
+      db.collection("user_settings").find({}).toArray(),
+      db.collection("customers").countDocuments(),
+      db.collection("returns").countDocuments(),
+      db.collection("return_entries").countDocuments(),
+      db.collection("orders").countDocuments(),
+      db.collection("qr_scans").countDocuments(),
+      db.collection("templates").countDocuments(),
+    ]);
+
+    const userEmails = new Set();
+    usersList.forEach((u) => {
+      if (u.email) userEmails.add(u.email.toLowerCase().trim());
+    });
+    userSettingsList.forEach((s) => {
+      if (s.email) userEmails.add(s.email.toLowerCase().trim());
+    });
+
+    const blockedMap = new Map();
+    usersList.forEach((u) => {
+      if (u.email) blockedMap.set(u.email.toLowerCase().trim(), Boolean(u.isBlocked));
+    });
+    userSettingsList.forEach((s) => {
+      if (s.email && s.isBlocked) {
+        blockedMap.set(s.email.toLowerCase().trim(), true);
+      }
+    });
+
+    let activeUsers = 0;
+    let blockedUsers = 0;
+    userEmails.forEach((em) => {
+      if (blockedMap.get(em) === true) {
+        blockedUsers++;
+      } else {
+        activeUsers++;
+      }
+    });
+
+    res.json({
+      success: true,
+      stats: {
+        totalUsers: userEmails.size,
+        activeUsers,
+        blockedUsers,
+        totalCustomers,
+        totalReturns: totalReturns1 + totalReturns2,
+        totalOrders,
+        totalScans,
+        totalTemplates,
+      },
+    });
+  } catch (err) {
+    console.error("SuperAdmin stats API error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 2. GET /api/admin/users - SuperAdmin user directory with live settings & stats
+app.get("/api/admin/users", async (req, res) => {
+  try {
+    const activeEmail = getUserEmail(req);
+    if (!isSuperAdminUser(activeEmail)) {
+      return res.status(403).json({ error: "Access Denied: SuperAdmin privileges required." });
+    }
+
+    const db = await getDb();
+    const [rawUsers, rawSettings, customerAgg, returnsAgg, ordersAgg, scansAgg] =
+      await Promise.all([
+        db.collection("users").find({}).toArray(),
+        db.collection("user_settings").find({}).toArray(),
+        db
+          .collection("customers")
+          .aggregate([{ $group: { _id: "$userEmail", count: { $sum: 1 } } }])
+          .toArray()
+          .catch(() => []),
+        db
+          .collection("returns")
+          .aggregate([{ $group: { _id: "$userEmail", count: { $sum: 1 } } }])
+          .toArray()
+          .catch(() => []),
+        db
+          .collection("orders")
+          .aggregate([{ $group: { _id: "$userEmail", count: { $sum: 1 } } }])
+          .toArray()
+          .catch(() => []),
+        db
+          .collection("qr_scans")
+          .aggregate([{ $group: { _id: "$sellerEmail", count: { $sum: 1 } } }])
+          .toArray()
+          .catch(() => []),
+      ]);
+
+    const customerCountMap = new Map();
+    customerAgg.forEach((c) => {
+      if (c._id) customerCountMap.set(c._id.toLowerCase().trim(), c.count);
+    });
+
+    const returnCountMap = new Map();
+    returnsAgg.forEach((r) => {
+      if (r._id) returnCountMap.set(r._id.toLowerCase().trim(), r.count);
+    });
+
+    const orderCountMap = new Map();
+    ordersAgg.forEach((o) => {
+      if (o._id) orderCountMap.set(o._id.toLowerCase().trim(), o.count);
+    });
+
+    const scanCountMap = new Map();
+    scansAgg.forEach((s) => {
+      if (s._id) scanCountMap.set(s._id.toLowerCase().trim(), s.count);
+    });
+
+    const settingsMap = new Map();
+    rawSettings.forEach((s) => {
+      if (s.email) {
+        settingsMap.set(s.email.toLowerCase().trim(), s);
+      }
+    });
+
+    const usersMap = new Map();
+    rawUsers.forEach((u) => {
+      if (u.email) {
+        usersMap.set(u.email.toLowerCase().trim(), u);
+      }
+    });
+
+    rawSettings.forEach((s) => {
+      if (s.email) {
+        const clean = s.email.toLowerCase().trim();
+        if (!usersMap.has(clean)) {
+          usersMap.set(clean, {
+            email: clean,
+            name: s.storeName || clean.split("@")[0],
+            isBlocked: Boolean(s.isBlocked),
+            role: isSuperAdminUser(clean) ? "superadmin" : "user",
+            createdAt: s.updatedAt || new Date(),
+          });
+        }
+      }
+    });
+
+    const enrichedUsers = Array.from(usersMap.values()).map((user) => {
+      const cleanEmail = (user.email || "").toLowerCase().trim();
+      const settings = settingsMap.get(cleanEmail) || {};
+      const isSuper = isSuperAdminUser(cleanEmail);
+      const isBlocked = Boolean(user.isBlocked || settings.isBlocked);
+
+      return {
+        id: user._id ? user._id.toString() : cleanEmail,
+        email: cleanEmail,
+        name: user.name || settings.storeName || cleanEmail.split("@")[0],
+        image: user.image || "",
+        role: isSuper ? "superadmin" : (user.role || "user"),
+        isSuperAdmin: isSuper,
+        isBlocked: isBlocked,
+        createdAt: user.createdAt || settings.updatedAt || null,
+        lastLoginAt: user.lastLoginAt || null,
+        storeName: settings.storeName || "Not set",
+        stats: {
+          customersCount: customerCountMap.get(cleanEmail) || 0,
+          returnsCount: returnCountMap.get(cleanEmail) || 0,
+          ordersCount: orderCountMap.get(cleanEmail) || 0,
+          scansCount: scanCountMap.get(cleanEmail) || 0,
+        },
+        settings: {
+          storeName: settings.storeName || "",
+          phone: settings.phone || "",
+          supportEmail: settings.supportEmail || "",
+          storeUrl: settings.storeUrl || "",
+          instagramHandle: settings.instagramHandle || "",
+          customNote: settings.customNote || "",
+          enableQr: settings.enableQr !== undefined ? Boolean(settings.enableQr) : true,
+          useNativeScript: Boolean(settings.useNativeScript),
+          stampStyle: settings.stampStyle || "badge",
+          qrText: settings.qrText || "",
+          detailText: settings.detailText || "",
+          qrX: settings.qrX !== undefined ? settings.qrX : 14,
+          qrY: settings.qrY !== undefined ? settings.qrY : 14,
+          qrSize: settings.qrSize !== undefined ? settings.qrSize : 70,
+          fontSize: settings.fontSize !== undefined ? settings.fontSize : 8,
+          sortBy: settings.sortBy || "sku",
+          sortOrder: settings.sortOrder || "asc",
+          downloadSummary: Boolean(settings.downloadSummary),
+          enableWhatsApp: Boolean(settings.enableWhatsApp || settings.sendWhatsApp),
+          sendWhatsApp: Boolean(settings.enableWhatsApp || settings.sendWhatsApp),
+          waApiKey: settings.waApiKey || "",
+          waReceiverNumber: settings.waReceiverNumber || "",
+          pdfReceiverNumber: settings.pdfReceiverNumber || "",
+          imageReceiverNumber: settings.imageReceiverNumber || "",
+          cropEnabled: Boolean(settings.cropEnabled),
+          cropPreset: settings.cropPreset || "label_only",
+          cropMode: settings.cropMode || "custom",
+          cropTop: settings.cropTop !== undefined ? settings.cropTop : 0,
+          cropBottom: settings.cropBottom !== undefined ? settings.cropBottom : 58,
+          cropLeft: settings.cropLeft !== undefined ? settings.cropLeft : 0,
+          cropRight: settings.cropRight !== undefined ? settings.cropRight : 0,
+          updatedAt: settings.updatedAt || null,
+        },
+      };
+    });
+
+    enrichedUsers.sort((a, b) => {
+      if (a.isSuperAdmin && !b.isSuperAdmin) return -1;
+      if (!a.isSuperAdmin && b.isSuperAdmin) return 1;
+      const dateA = new Date(a.lastLoginAt || a.createdAt || 0).getTime();
+      const dateB = new Date(b.lastLoginAt || b.createdAt || 0).getTime();
+      return dateB - dateA;
+    });
+
+    res.json({
+      success: true,
+      count: enrichedUsers.length,
+      users: enrichedUsers,
+    });
+  } catch (err) {
+    console.error("SuperAdmin users API error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 3. POST /api/admin/users/settings - SuperAdmin updates any user's settings
+app.post("/api/admin/users/settings", async (req, res) => {
+  try {
+    const activeEmail = getUserEmail(req);
+    if (!isSuperAdminUser(activeEmail)) {
+      return res.status(403).json({ error: "Access Denied: SuperAdmin privileges required." });
+    }
+
+    const body = req.body || {};
+    const targetEmail = (body.email || "").toLowerCase().trim();
+    if (!targetEmail) {
+      return res.status(400).json({ error: "Target user email is required." });
+    }
+
+    const userSettingsInput = body.settings || body;
+    const allowedFields = [
+      "storeName",
+      "phone",
+      "supportEmail",
+      "storeUrl",
+      "instagramHandle",
+      "customNote",
+      "enableQr",
+      "useNativeScript",
+      "stampStyle",
+      "qrText",
+      "detailText",
+      "qrX",
+      "qrY",
+      "qrSize",
+      "fontSize",
+      "sortBy",
+      "sortOrder",
+      "downloadSummary",
+      "enableWhatsApp",
+      "sendWhatsApp",
+      "cropEnabled",
+      "cropPreset",
+      "cropMode",
+      "cropTop",
+      "cropBottom",
+      "cropLeft",
+      "cropRight",
+      "waApiKey",
+      "waReceiverNumber",
+      "pdfReceiverNumber",
+      "imageReceiverNumber",
+    ];
+
+    const updateDoc = {
+      email: targetEmail,
+      updatedAt: new Date(),
+    };
+
+    for (const key of allowedFields) {
+      if (userSettingsInput[key] !== undefined) {
+        updateDoc[key] = userSettingsInput[key];
+      }
+    }
+
+    if (updateDoc.sendWhatsApp !== undefined && updateDoc.enableWhatsApp === undefined) {
+      updateDoc.enableWhatsApp = updateDoc.sendWhatsApp;
+    } else if (updateDoc.enableWhatsApp !== undefined && updateDoc.sendWhatsApp === undefined) {
+      updateDoc.sendWhatsApp = updateDoc.enableWhatsApp;
+    }
+
+    const db = await getDb();
+    await db.collection("user_settings").updateOne(
+      { email: targetEmail },
+      { $set: updateDoc },
+      { upsert: true }
+    );
+
+    if (updateDoc.storeName) {
+      await db.collection("users").updateOne(
+        { email: targetEmail },
+        { $set: { storeName: updateDoc.storeName } }
+      );
+    }
+
+    res.json({
+      success: true,
+      message: `Settings updated successfully for ${targetEmail}`,
+      settings: updateDoc,
+    });
+  } catch (err) {
+    console.error("SuperAdmin update user settings error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 4. POST /api/admin/users/block - SuperAdmin blocks or unblocks a user
+app.post("/api/admin/users/block", async (req, res) => {
+  try {
+    const activeEmail = getUserEmail(req);
+    if (!isSuperAdminUser(activeEmail)) {
+      return res.status(403).json({ error: "Access Denied: SuperAdmin privileges required." });
+    }
+
+    const body = req.body || {};
+    const targetEmail = (body.email || "").toLowerCase().trim();
+    const shouldBlock = Boolean(body.isBlocked);
+
+    if (!targetEmail) {
+      return res.status(400).json({ error: "Target user email is required." });
+    }
+
+    if (isSuperAdminUser(targetEmail)) {
+      return res.status(400).json({ error: "Action prohibited: The primary SuperAdmin account cannot be blocked." });
+    }
+
+    const db = await getDb();
+    await db.collection("users").updateOne(
+      { email: targetEmail },
+      {
+        $set: {
+          isBlocked: shouldBlock,
+          blockedAt: shouldBlock ? new Date() : null,
+          blockedBy: shouldBlock ? activeEmail : null,
+        },
+      },
+      { upsert: true }
+    );
+
+    await db.collection("user_settings").updateOne(
+      { email: targetEmail },
+      {
+        $set: {
+          isBlocked: shouldBlock,
+          blockedAt: shouldBlock ? new Date() : null,
+        },
+      },
+      { upsert: true }
+    );
+
+    clearAllApiCache();
+
+    res.json({
+      success: true,
+      email: targetEmail,
+      isBlocked: shouldBlock,
+      message: shouldBlock
+        ? `User ${targetEmail} has been successfully BLOCKED.`
+        : `User ${targetEmail} has been successfully UNBLOCKED.`,
+    });
+  } catch (err) {
+    console.error("SuperAdmin block user error:", err);
+    res.status(500).json({ error: err.message });
   }
 });
 
