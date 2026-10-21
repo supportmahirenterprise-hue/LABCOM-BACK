@@ -4405,6 +4405,117 @@ app.get("/api/admin/users", async (req, res) => {
   }
 });
 
+// GET /api/admin/drilldown - Inspect raw customer, order, scan, and return records for any user
+app.get("/api/admin/drilldown", async (req, res) => {
+  try {
+    const activeEmail = getUserEmail(req);
+    if (!isSuperAdminUser(activeEmail)) {
+      return res.status(403).json({ error: "Access Denied: SuperAdmin privileges required." });
+    }
+
+    const targetEmail = (req.query.targetEmail || "").toLowerCase().trim();
+    const type = (req.query.type || "customers").toLowerCase().trim();
+    const isUnassigned =
+      targetEmail === "unassigned@system" ||
+      targetEmail === "unassigned" ||
+      targetEmail === "guest" ||
+      targetEmail === "legacy.imports";
+
+    const db = await getDb();
+    let records = [];
+
+    if (type === "customers") {
+      let filter = {};
+      if (isUnassigned) {
+        filter = {
+          $or: [
+            { userEmail: "guest" },
+            { userEmail: "resilience_auditor@labelpro.in" },
+            { userEmail: { $exists: false } },
+            { userEmail: null },
+            { userEmail: "" },
+          ],
+        };
+      } else {
+        filter = { userEmail: targetEmail };
+      }
+      records = await db
+        .collection("customers")
+        .find(filter)
+        .sort({ orderCount: -1, updatedAt: -1, createdAt: -1 })
+        .limit(1000)
+        .toArray();
+    } else if (type === "orders") {
+      let filter = {};
+      if (isUnassigned) {
+        filter = {
+          $or: [
+            { userEmail: "guest" },
+            { userEmail: "resilience_auditor@labelpro.in" },
+            { userEmail: { $exists: false } },
+            { userEmail: null },
+            { userEmail: "" },
+          ],
+        };
+      } else {
+        filter = { userEmail: targetEmail };
+      }
+      records = await db
+        .collection("orders")
+        .find(filter)
+        .sort({ scannedAt: -1, createdAt: -1 })
+        .limit(1000)
+        .toArray();
+    } else if (type === "returns") {
+      let filter = {};
+      if (isUnassigned) {
+        filter = {
+          $or: [
+            { userEmail: "guest" },
+            { userEmail: "resilience_auditor@labelpro.in" },
+            { userEmail: { $exists: false } },
+            { userEmail: null },
+            { userEmail: "" },
+          ],
+        };
+      } else {
+        filter = { userEmail: targetEmail };
+      }
+      const [r1, r2] = await Promise.all([
+        db.collection("returns").find(filter).sort({ returnDate: -1, createdAt: -1 }).limit(500).toArray(),
+        db.collection("return_entries").find(filter).sort({ returnDate: -1, createdAt: -1 }).limit(500).toArray(),
+      ]);
+      records = [...r1, ...r2].sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0));
+    } else if (type === "scans") {
+      let filter = {};
+      if (isUnassigned) {
+        filter = {
+          $or: [
+            { sellerEmail: "guest" },
+            { sellerEmail: "resilience_auditor@labelpro.in" },
+            { sellerEmail: { $exists: false } },
+            { sellerEmail: null },
+            { sellerEmail: "" },
+          ],
+        };
+      } else {
+        filter = { sellerEmail: targetEmail };
+      }
+      records = await db
+        .collection("qr_scans")
+        .find(filter)
+        .sort({ date: -1, timestamp: -1 })
+        .limit(1000)
+        .toArray();
+    }
+
+    return res.json({ success: true, count: records.length, records });
+  } catch (err) {
+    console.error("SuperAdmin drilldown API error:", err);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
 // 3. POST /api/admin/users/settings - SuperAdmin updates any user's settings
 app.post("/api/admin/users/settings", async (req, res) => {
   try {
