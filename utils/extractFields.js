@@ -313,7 +313,7 @@ function parseMeeshoPage(text, lines, regionalInfo, actualPageNumber) {
 
   // 3. Customer Name & Address
   let customerName =
-    get(text, /Customer Address\s*[\r\n]+\s*([^\r\n]+)/i) ||
+    get(text, /Customer Address\s*[:\s]*[\r\n]+\s*([^\r\n]+)/i) ||
     get(text, /BILL TO\s*[:\s]*[\r\n]*\s*([^\r\n]+)/i) ||
     "";
 
@@ -323,6 +323,10 @@ function parseMeeshoPage(text, lines, regionalInfo, actualPageNumber) {
     customerAddress = addrMatch[1].trim().replace(/[\r\n]+/g, ", ");
   } else {
     customerAddress = customerName || "N/A";
+  }
+
+  if (!customerName && customerAddress && customerAddress !== "N/A") {
+    customerName = customerAddress.split(",")[0].trim();
   }
 
   // Mobile
@@ -468,6 +472,20 @@ function parseMeeshoPage(text, lines, regionalInfo, actualPageNumber) {
   else if (/Ecom\s*Express/i.test(text)) courier = "Ecom Express";
   else if (/Ekart/i.test(text)) courier = "Ekart";
 
+  // Resolve customer state and regional greeting strictly from customer delivery address
+  let detectedState = detectStateInText(customerAddress);
+  let resolvedRegional = regionalInfo;
+  if (customerAddress && customerAddress.length > 5) {
+    const custRegional = resolveRegionalGreeting(customerAddress, false);
+    if (custRegional && custRegional.state && custRegional.state !== "India") {
+      resolvedRegional = custRegional;
+      detectedState = custRegional.state;
+    }
+  }
+  if (!detectedState) {
+    detectedState = resolvedRegional.state || "India";
+  }
+
   return {
     page: actualPageNumber,
     platform: "meesho",
@@ -483,12 +501,12 @@ function parseMeeshoPage(text, lines, regionalInfo, actualPageNumber) {
     size,
     qty,
     color,
-    state: regionalInfo.state,
+    state: detectedState,
     courier,
-    regionalThankYou: regionalInfo.regionalThankYou,
-    regionalThankYouLatin: regionalInfo.regionalThankYouLatin,
-    regionalThankYouNative: regionalInfo.regionalThankYouNative,
-    regionalLanguage: regionalInfo.regionalLanguage,
+    regionalThankYou: resolvedRegional.regionalThankYou,
+    regionalThankYouLatin: resolvedRegional.regionalThankYouLatin,
+    regionalThankYouNative: resolvedRegional.regionalThankYouNative,
+    regionalLanguage: resolvedRegional.regionalLanguage,
   };
 }
 

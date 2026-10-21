@@ -891,27 +891,34 @@ async function saveCustomerOrders(fields, userEmail) {
     const localCustomerState = new Map();
 
     for (const item of validItems) {
-      // Order insert
+      // Order insert (atomic upsert ensures same order/subOrder is never stored twice)
       if (item.orderNo && !existingOrderSet.has(item.orderNo) && !existingOrderSet.has(item.subOrderNo)) {
         existingOrderSet.add(item.orderNo);
         existingOrderSet.add(item.subOrderNo);
         orderOps.push({
-          insertOne: {
-            document: {
-              orderNo: item.orderNo,
-              subOrderNo: item.subOrderNo,
-              paymentType: item.paymentType,
-              customerName: item.custName,
-              customerMobile: item.mobile,
-              customerAddress: item.address,
-              state: item.state,
-              platform: item.platform,
-              orderDate: item.orderDate,
-              sku: item.sku,
-              qty: item.qty,
+          updateOne: {
+            filter: {
               userEmail: activeEmail,
-              createdAt: new Date(),
+              subOrderNo: item.subOrderNo,
             },
+            update: {
+              $setOnInsert: {
+                orderNo: item.orderNo,
+                subOrderNo: item.subOrderNo,
+                paymentType: item.paymentType,
+                customerName: item.custName,
+                customerMobile: item.mobile,
+                customerAddress: item.address,
+                state: item.state,
+                platform: item.platform,
+                orderDate: item.orderDate,
+                sku: item.sku,
+                qty: item.qty,
+                userEmail: activeEmail,
+                createdAt: new Date(),
+              },
+            },
+            upsert: true,
           },
         });
       }
@@ -4490,6 +4497,23 @@ app.use((err, req, res, next) => {
     error: err.message || "An unexpected error occurred on the server.",
   });
 });
+
+async function ensureDbIndexes() {
+  try {
+    const db = await getDb();
+    await db.collection("orders").createIndex(
+      { userEmail: 1, subOrderNo: 1 },
+      { unique: true, partialFilterExpression: { subOrderNo: { $type: "string", $gt: "" } } }
+    );
+    await db.collection("customers").createIndex(
+      { userEmail: 1, custKey: 1 },
+      { unique: true, partialFilterExpression: { custKey: { $type: "string", $gt: "" } } }
+    );
+  } catch (e) {
+    console.warn("DB index initialization notice:", e.message);
+  }
+}
+ensureDbIndexes().catch(() => {});
 
 const PORT = process.env.PORT || 5001;
 const server = app.listen(PORT, () => console.log(`🚀 LABCOM Backend running on http://localhost:${PORT}`));
