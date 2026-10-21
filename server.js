@@ -120,6 +120,83 @@ app.options("*", cors());
 app.use(express.json({ limit: "500mb" }));
 app.use(express.urlencoded({ limit: "500mb", extended: true }));
 
+// ---- HIGH-PERFORMANCE IN-MEMORY BLOCKED USERS CACHE & MIDDLEWARE ----
+let backendBlockedUsersSet = new Set();
+let lastBlockedUsersSync = 0;
+const BLOCKED_USERS_SYNC_MS = 60 * 1000;
+
+async function syncBackendBlockedUsers(force = false) {
+  const now = Date.now();
+  if (!force && now - lastBlockedUsersSync < BLOCKED_USERS_SYNC_MS) {
+    return backendBlockedUsersSet;
+  }
+  try {
+    const db = await getDb();
+    const blockedDocs = await db
+      .collection("users")
+      .find({ isBlocked: true }, { projection: { email: 1 } })
+      .toArray();
+    const newSet = new Set();
+    blockedDocs.forEach((u) => {
+      if (u.email && typeof u.email === "string") {
+        newSet.add(u.email.toLowerCase().trim());
+      }
+    });
+    backendBlockedUsersSet = newSet;
+    lastBlockedUsersSync = Date.now();
+  } catch (err) {
+    console.error("[BackendBlockGuard] Sync error:", err.message);
+  }
+  return backendBlockedUsersSet;
+}
+
+// Background sync every 60s
+syncBackendBlockedUsers().catch(() => {});
+setInterval(() => syncBackendBlockedUsers().catch(() => {}), BLOCKED_USERS_SYNC_MS);
+
+// Internal sync endpoint called by Admin Block route
+app.post("/api/internal/block-sync", (req, res) => {
+  try {
+    const { email, isBlocked } = req.body || {};
+    if (email && typeof email === "string") {
+      const clean = email.toLowerCase().trim();
+      if (isBlocked) {
+        backendBlockedUsersSet.add(clean);
+      } else {
+        backendBlockedUsersSet.delete(clean);
+      }
+    }
+  } catch (e) {}
+  return res.json({ success: true });
+});
+
+// Zero-latency O(1) in-memory block guard middleware (< 0.001 ms, 0 DB queries)
+app.use((req, res, next) => {
+  try {
+    // Exclude public/internal routes
+    if (req.path === "/health" || req.path === "/api/health" || req.path === "/api/internal/block-sync") {
+      return next();
+    }
+    const headerEmail = req.headers["x-user-email"];
+    const queryEmail = req.query?.email || req.query?.userEmail || req.query?.sellerEmail;
+    const bodyEmail = req.body?.email || req.body?.userEmail || req.body?.sellerEmail;
+    const rawEmail = headerEmail || queryEmail || bodyEmail;
+
+    if (rawEmail && typeof rawEmail === "string") {
+      const cleanEmail = rawEmail.toLowerCase().trim();
+      if (backendBlockedUsersSet.has(cleanEmail)) {
+        return res.status(403).json({
+          error: "ACCOUNT_SUSPENDED",
+          message: "Your account has been restricted by an administrator.",
+        });
+      }
+    }
+  } catch (e) {
+    // Non-blocking fail-open for unhandled errors
+  }
+  next();
+});
+
 function drawShopIconCanvas(ctx, x, y, size) {
   ctx.save();
   ctx.fillStyle = "#000000";
