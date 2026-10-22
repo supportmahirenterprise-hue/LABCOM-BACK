@@ -68,7 +68,17 @@ function detectPlatform(text) {
     return "flipkart";
   }
 
-  // 3. Meesho: Customer Address, If undelivered return to, or Sub-Order pattern (\d{10,}_\d+)
+  // 3. Glowroad
+  if (/Glowroad/i.test(t)) {
+    return "glowroad";
+  }
+
+  // 4. Shopsy
+  if (/Shopsy/i.test(t)) {
+    return "shopsy";
+  }
+
+  // 5. Meesho: Customer Address, If undelivered return to, or Sub-Order pattern (\d{10,}_\d+)
   if (
     /Customer\s+Address/i.test(t) ||
     /If undelivered,?\s*return to/i.test(t) ||
@@ -129,7 +139,7 @@ function parseFlipkartPage(text, lines, regionalInfo, actualPageNumber) {
     const nameMatch = addrMatch[1].trim().split(/[\r\n,]+/)[0];
     customerName = (nameMatch || "").trim().slice(0, 50);
   } else {
-    customerName = get(text, /(?:Deliver to|Shipping Address|Buyer)\s*[:\s]*[\r\n]*([^\r\n,]+)/i) || "Customer";
+    customerName = get(text, /(?:Deliver to|Shipping Address|Buyer)\s*[:\s]*[\r\n]*([^\r\n,]+)/i) || "";
     customerAddress = customerName;
   }
 
@@ -244,7 +254,7 @@ function parseAmazonPage(text, lines, regionalInfo, actualPageNumber) {
     const nameMatch = addrMatch[1].trim().split(/[\r\n]+/)[0];
     customerName = (nameMatch || "").trim().slice(0, 50);
   } else {
-    customerName = get(text, /(?:Deliver to|Shipping Address)\s*[:\s]*[\r\n]*([^\r\n]+)/i) || "Customer";
+    customerName = get(text, /(?:Deliver to|Shipping Address)\s*[:\s]*[\r\n]*([^\r\n]+)/i) || "";
     customerAddress = customerName;
   }
 
@@ -298,7 +308,7 @@ function parseMeeshoPage(text, lines, regionalInfo, actualPageNumber) {
     get(text, /Purchase Order No\.?\s*[:\s]*[\r\n]*\s*(\S+)/i) ||
     (subOrderNo ? subOrderNo.split("_")[0] : "") ||
     get(text, /Order No\.?\s*[:\s]*[\r\n]*\s*(\S+)/i) ||
-    (text.match(/(\d{10,})/) ? text.match(/(\d{10,})/)[1] : "") ||
+    (text.match(/\b(\d{14,19})\b/) ? text.match(/\b(\d{14,19})\b/)[1] : "") ||
     "";
 
   if (!subOrderNo) {
@@ -322,7 +332,7 @@ function parseMeeshoPage(text, lines, regionalInfo, actualPageNumber) {
   if (addrMatch && addrMatch[1].trim().length > 10) {
     customerAddress = addrMatch[1].trim().replace(/[\r\n]+/g, ", ");
   } else {
-    customerAddress = customerName || "N/A";
+    customerAddress = customerName || "";
   }
 
   if (!customerName && customerAddress && customerAddress !== "N/A") {
@@ -559,4 +569,33 @@ function extractFieldsFromPages(pageTexts, useNativeScript = false, startPageOff
   });
 }
 
-module.exports = { extractFieldsFromPages, detectPlatform };
+function isValidOrderAndCustomer(orderNo, custName) {
+  if (!orderNo || typeof orderNo !== "string") return false;
+  const cleanOrder = orderNo.trim();
+  if (cleanOrder.length < 5) return false;
+  if (/^ORDER-\d+$/i.test(cleanOrder)) return false;
+
+  if (!custName || typeof custName !== "string") return false;
+  const cleanName = custName.trim();
+  if (cleanName.length < 2) return false;
+
+  const lowerName = cleanName.toLowerCase();
+  const dummyNames = [
+    "customer",
+    "unknown customer",
+    "customer name",
+    "n/a",
+    "na",
+    "-",
+    "--",
+    "undefined",
+    "null",
+  ];
+  if (dummyNames.includes(lowerName)) return false;
+  if (lowerName.startsWith("customer page #") || lowerName.startsWith("customer page#")) return false;
+
+  return true;
+}
+
+module.exports = { extractFieldsFromPages, detectPlatform, isValidOrderAndCustomer };
+

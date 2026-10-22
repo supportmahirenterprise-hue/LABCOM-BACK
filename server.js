@@ -7,7 +7,7 @@ const { PDFDocument, rgb, StandardFonts } = require("pdf-lib");
 const QRCode = require("qrcode");
 const { ObjectId } = require("mongodb");
 const { getDb } = require("./db");
-const { extractFieldsFromPages } = require("./utils/extractFields");
+const { extractFieldsFromPages, isValidOrderAndCustomer } = require("./utils/extractFields");
 const { parseCsv } = require("./utils/csvParser");
 const { sendWhatsAppMedia, DEFAULT_RECEIVER_NUMBER } = require("./utils/whatsapp");
 const { generateSummaryCanvasImage } = require("./utils/summaryCanvas");
@@ -899,18 +899,14 @@ async function saveCustomerOrders(fields, userEmail) {
       const sku = (item.sku || "").trim();
       const qty = parseInt(item.qty, 10) || 1;
       const state = (item.state || "India").trim();
-
-      if (!custName && !orderNo && !mobile) continue;
+      // STRICT REQUIREMENT: Only make an entry if BOTH Order ID AND Customer Name are found & valid!
+      if (!isValidOrderAndCustomer(orderNo, custName)) continue;
 
       let custKey = "";
       if (mobile && mobile.length >= 10) {
         custKey = `phone:${mobile}`;
-      } else if (custName && custName.length > 2) {
-        custKey = `name:${custName.toLowerCase().replace(/[^a-z0-9]/g, "")}`;
-      } else if (orderNo) {
-        custKey = `order:${orderNo}`;
       } else {
-        continue;
+        custKey = `name:${custName.toLowerCase().replace(/[^a-z0-9]/g, "")}`;
       }
 
       const platform = (item.platform || "meesho").toLowerCase().trim();
@@ -2812,15 +2808,24 @@ app.post("/api/preview", upload.single("pdf"), async (req, res) => {
     const pageTexts = await getPerPageText(req.file.buffer, startPage, endPage);
     const fields = extractFieldsFromPages(pageTexts, useNative, startPage);
 
-    // Auto-save extracted customer details to DB asynchronously
-    saveCustomerOrders(fields, getUserEmail(req)).catch((e) => console.error("Auto-save customer error:", e));
+    // Reject non-label / invalid PDFs where Order ID and Customer Name cannot be found
+    const validFields = fields.filter((f) => isValidOrderAndCustomer(f.orderNo, f.customerName));
+    if (validFields.length === 0) {
+      return res.status(400).json({
+        error: "Kripya thik shipping label PDF upload karein (Order ID aur Customer Name nahi mila).",
+        code: "INVALID_LABEL_PDF",
+      });
+    }
+
+    // Auto-save ONLY verified customer orders to DB asynchronously
+    saveCustomerOrders(validFields, getUserEmail(req)).catch((e) => console.error("Auto-save customer error:", e));
 
     // Check past return history for extracted label pages
-    const returnWarnings = await checkReturnHistoryForPages(fields, getUserEmail(req));
-    const duplicateOrderWarnings = await checkDuplicateOrdersForPages(fields, getUserEmail(req));
+    const returnWarnings = await checkReturnHistoryForPages(validFields, getUserEmail(req));
+    const duplicateOrderWarnings = await checkDuplicateOrdersForPages(validFields, getUserEmail(req));
 
     // Calculate platform counts & detect mixed uploads
-    const platformCounts = { meesho: 0, flipkart: 0, amazon: 0 };
+    const platformCounts = { meesho: 0, flipkart: 0, amazon: 0, glowroad: 0, shopsy: 0 };
     fields.forEach((f) => {
       const p = (f.platform || "meesho").toLowerCase();
       if (platformCounts[p] !== undefined) {
@@ -2894,8 +2899,11 @@ app.post("/api/generate_deprecated", upload.single("pdf"), async (req, res) => {
     const pageTexts = await getPerPageText(req.file.buffer, startP, endP);
     let fields = extractFieldsFromPages(pageTexts, isNativeScript, startP);
 
-    // Auto-save extracted customer details to DB asynchronously
-    saveCustomerOrders(fields, getUserEmail(req)).catch((e) => console.error("Auto-save customer error:", e));
+    // Auto-save ONLY verified customer orders to DB asynchronously
+    const validFields = fields.filter((f) => isValidOrderAndCustomer(f.orderNo, f.customerName));
+    if (validFields.length > 0) {
+      saveCustomerOrders(validFields, getUserEmail(req)).catch((e) => console.error("Auto-save customer error:", e));
+    }
 
     let overrideData = [];
     try {
@@ -3851,7 +3859,10 @@ app.post("/api/history", async (req, res) => {
 
     // Also upsert each order/customer from pages array into DB (async, non-blocking)
     if (!isSample && Array.isArray(pages) && pages.length > 0) {
-      saveCustomerOrders(pages, email).catch((e) => console.error("History-triggered customer save error:", e));
+      const validPages = pages.filter((p) => isValidOrderAndCustomer(p.orderNo, p.customerName));
+      if (validPages.length > 0) {
+        saveCustomerOrders(validPages, email).catch((e) => console.error("History-triggered customer save error:", e));
+      }
     }
 
     await db.collection("batch_history").insertOne({
