@@ -9,7 +9,7 @@ const { ObjectId } = require("mongodb");
 const { getDb } = require("./db");
 const { extractFieldsFromPages, isValidOrderAndCustomer } = require("./utils/extractFields");
 const { parseCsv } = require("./utils/csvParser");
-const { sendWhatsAppMedia, DEFAULT_RECEIVER_NUMBER } = require("./utils/whatsapp");
+const { sendWhatsAppMedia } = require("./utils/whatsapp");
 const { generateSummaryCanvasImage } = require("./utils/summaryCanvas");
 
 const path = require("path");
@@ -3110,36 +3110,48 @@ app.post("/api/generate_deprecated", upload.single("pdf"), async (req, res) => {
             } catch (e) {}
           }
 
-          const pdfReceiver = req.body?.pdfReceiverNumber || req.body?.whatsappNumber || userSettings?.pdfReceiverNumber || userSettings?.waReceiverNumber || userSettings?.phone || DEFAULT_RECEIVER_NUMBER;
-          const imageReceiver = req.body?.imageReceiverNumber || req.body?.whatsappNumber || userSettings?.imageReceiverNumber || userSettings?.waReceiverNumber || userSettings?.phone || DEFAULT_RECEIVER_NUMBER;
+          const pdfReceiver = req.body?.pdfReceiverNumber || req.body?.whatsappNumber || userSettings?.pdfReceiverNumber || userSettings?.waReceiverNumber || userSettings?.phone || "";
+          const imageReceiver = req.body?.imageReceiverNumber || req.body?.whatsappNumber || userSettings?.imageReceiverNumber || userSettings?.waReceiverNumber || userSettings?.phone || "";
+
+          if (!pdfReceiver && !imageReceiver) {
+            console.log("[WhatsApp Integration] Skipped: No WhatsApp receiver phone number configured by user.");
+            return;
+          }
+
+          const userWaApiKey = (req.body?.waApiKey || userSettings?.waApiKey || "").toString().trim();
+          if (!userWaApiKey) {
+            console.log("[WhatsApp Integration] Skipped: No WhatsApp API Key configured by user.");
+            return;
+          }
 
           const stampedFileName = isSample ? `1_${dateStr}_sample_test_page_1.pdf` : `${pageCount}_${dateStr}_stamped.pdf`;
           const summaryFileName = isSample ? `1_${dateStr}_sample_summary.png` : `${pageCount}_${dateStr}_summary.png`;
 
           const sortedFields = (order || []).map((idx) => fields[idx] || {});
 
-          // 1. Send Stamped PDF to pdfReceiver
-          const pdfBase64 = `data:application/pdf;base64,${Buffer.from(outBytes).toString("base64")}`;
-          await sendWhatsAppMedia({
-            apiKey: req.body?.waApiKey || userSettings?.waApiKey,
-            number: pdfReceiver,
-            fileData: pdfBase64,
-            fileName: stampedFileName,
-            filename: stampedFileName,
-            caption: "",
-            mimeType: "application/pdf",
-            typeName: "Stamped PDF",
-          });
+          // 1. Send Stamped PDF to pdfReceiver if provided
+          if (pdfReceiver) {
+            const pdfBase64 = `data:application/pdf;base64,${Buffer.from(outBytes).toString("base64")}`;
+            await sendWhatsAppMedia({
+              apiKey: userWaApiKey,
+              number: pdfReceiver,
+              fileData: pdfBase64,
+              fileName: stampedFileName,
+              filename: stampedFileName,
+              caption: "",
+              mimeType: "application/pdf",
+              typeName: "Stamped PDF",
+            });
+            // 1 second pause between media dispatches for gateway stability
+            await new Promise((resolve) => setTimeout(resolve, 1000));
+          }
 
-          // 1 second pause between media dispatches for gateway stability
-          await new Promise((resolve) => setTimeout(resolve, 1000));
-
-          // 2. Generate Summary PNG Image and Send to imageReceiver
+          // 2. Generate Summary PNG Image and Send to imageReceiver if provided
           const dataForSummary = sortedFields.length > 0 ? sortedFields : fields;
-          if (dataForSummary && dataForSummary.length > 0) {
+          if (imageReceiver && dataForSummary && dataForSummary.length > 0) {
             const summaryPngBase64 = generateSummaryCanvasImage(dataForSummary, req.file?.originalname || "labels.pdf");
             await sendWhatsAppMedia({
-              apiKey: req.body?.waApiKey || userSettings?.waApiKey,
+              apiKey: userWaApiKey,
               number: imageReceiver,
               fileData: summaryPngBase64,
               fileName: summaryFileName,
@@ -3178,11 +3190,16 @@ app.post("/api/whatsapp/dispatch-final", upload.single("pdf"), async (req, res) 
       } catch (e) {}
     }
 
-    const pdfReceiver = req.body?.pdfReceiverNumber || req.body?.whatsappNumber || userSettings?.pdfReceiverNumber || userSettings?.waReceiverNumber || userSettings?.phone || DEFAULT_RECEIVER_NUMBER;
-    const imageReceiver = req.body?.imageReceiverNumber || req.body?.whatsappNumber || userSettings?.imageReceiverNumber || userSettings?.waReceiverNumber || userSettings?.phone || DEFAULT_RECEIVER_NUMBER;
+    const pdfReceiver = req.body?.pdfReceiverNumber || req.body?.whatsappNumber || userSettings?.pdfReceiverNumber || userSettings?.waReceiverNumber || userSettings?.phone || "";
+    const imageReceiver = req.body?.imageReceiverNumber || req.body?.whatsappNumber || userSettings?.imageReceiverNumber || userSettings?.waReceiverNumber || userSettings?.phone || "";
 
     if (!pdfReceiver && !imageReceiver) {
-      return res.status(400).json({ error: "Receiver WhatsApp number is required to dispatch labels. Please configure a valid WhatsApp number." });
+      return res.status(400).json({ error: "Receiver WhatsApp number is required to dispatch labels. Please configure a valid WhatsApp number in Settings." });
+    }
+
+    const activeApiKey = (req.body?.waApiKey || userSettings?.waApiKey || "").toString().trim();
+    if (!activeApiKey) {
+      return res.status(400).json({ error: "WhatsApp API Key is missing. Please configure your LaterPro WhatsApp API Key in Settings." });
     }
 
     const fileName = req.body?.fileName || "labels.pdf";
@@ -3199,10 +3216,10 @@ app.post("/api/whatsapp/dispatch-final", upload.single("pdf"), async (req, res) 
     const stampedFileName = `${totalPages}_${dateStr}_stamped.pdf`;
     const summaryFileName = `${totalPages}_${dateStr}_summary.png`;
 
-    if (req.file && req.file.buffer && req.file.buffer.length > 0) {
+    if (pdfReceiver && req.file && req.file.buffer && req.file.buffer.length > 0) {
       const pdfBase64 = `data:application/pdf;base64,${req.file.buffer.toString("base64")}`;
       await sendWhatsAppMedia({
-        apiKey: req.body?.waApiKey || userSettings?.waApiKey,
+        apiKey: activeApiKey,
         number: pdfReceiver,
         fileData: pdfBase64,
         fileName: stampedFileName,
@@ -3213,11 +3230,13 @@ app.post("/api/whatsapp/dispatch-final", upload.single("pdf"), async (req, res) 
       });
     }
 
-    if (pages && pages.length > 0) {
-      await new Promise((r) => setTimeout(r, 1000));
+    if (imageReceiver && pages && pages.length > 0) {
+      if (pdfReceiver) {
+        await new Promise((r) => setTimeout(r, 1000));
+      }
       const summaryPngBase64 = generateSummaryCanvasImage(pages, fileName);
       await sendWhatsAppMedia({
-        apiKey: req.body?.waApiKey || userSettings?.waApiKey,
+        apiKey: activeApiKey,
         number: imageReceiver,
         fileData: summaryPngBase64,
         fileName: summaryFileName,
@@ -3596,8 +3615,21 @@ app.post("/api/whatsapp/send-media", async (req, res) => {
     if (!fileData) {
       return res.status(400).json({ error: "Missing fileData parameter" });
     }
+    let activeApiKey = (req.body?.waApiKey || req.body?.apiKey || "").toString().trim();
+    if (!activeApiKey && email) {
+      try {
+        const db = await getDb();
+        const userSettings = await db.collection("user_settings").findOne({ email });
+        activeApiKey = (userSettings?.waApiKey || "").toString().trim();
+      } catch (e) {}
+    }
+
+    if (!activeApiKey) {
+      return res.status(400).json({ error: "WhatsApp API Key is missing. Please configure your LaterPro WhatsApp API Key in Settings." });
+    }
+
     const result = await sendWhatsAppMedia({
-      apiKey: req.body?.waApiKey || req.body?.apiKey,
+      apiKey: activeApiKey,
       number,
       fileData,
       fileName,

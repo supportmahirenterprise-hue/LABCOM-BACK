@@ -1,12 +1,10 @@
 const https = require("https");
 
-const WA_API_URL = process.env.WA_API_URL || "https://wa.lextrack.in/api/whatsapp/send-media";
-const WA_API_KEY = process.env.WA_API_KEY || "wa_c6854599bd4b7a54cad78edbdd6ace51";
-const DEFAULT_RECEIVER_NUMBER = process.env.WA_DEFAULT_RECEIVER || "";
-
+const WA_API_URL = process.env.WA_API_URL || "https://laterpro.in/api/whatsapp/send-media";
+const WA_API_KEY = process.env.WA_API_KEY || "";
 function sendWhatsAppMedia({
   apiKey,
-  number = DEFAULT_RECEIVER_NUMBER,
+  number,
   fileData,
   fileName,
   filename,
@@ -15,15 +13,18 @@ function sendWhatsAppMedia({
   mimetype,
   typeName = "Media",
 }) {
-  const activeApiKey = apiKey || WA_API_KEY;
+  const activeApiKey = (apiKey || WA_API_KEY || "").toString().trim();
   return new Promise((resolve, reject) => {
+    if (!activeApiKey) {
+      return reject(new Error("WhatsApp API Key is missing. Please configure your LaterPro WhatsApp API Key in Settings."));
+    }
     if (!fileData) {
       return reject(new Error("Missing fileData for WhatsApp media dispatch"));
     }
 
-    const rawNum = (number || DEFAULT_RECEIVER_NUMBER || "").toString().replace(/[^0-9]/g, "");
+    const rawNum = (number || "").toString().replace(/[^0-9]/g, "");
     if (!rawNum || rawNum.length < 10) {
-      return reject(new Error("Valid receiver WhatsApp number is required"));
+      return reject(new Error("Valid receiver WhatsApp number is required. Please configure your WhatsApp number in Settings."));
     }
     const formattedNumber = rawNum.length === 10 ? `91${rawNum}` : rawNum;
 
@@ -63,6 +64,10 @@ function sendWhatsAppMedia({
         res.on("end", () => {
           try {
             const parsed = JSON.parse(body);
+            if (res.statusCode >= 400 || (parsed && parsed.success === false)) {
+              const errMsg = parsed?.error || parsed?.message || `WhatsApp API error (status ${res.statusCode})`;
+              return reject(new Error(errMsg));
+            }
             console.log(
               `[WhatsApp API] ${typeName} sent successfully to ${formattedNumber}. MessageId: ${
                 parsed?.data?.messageId || "N/A"
@@ -70,6 +75,9 @@ function sendWhatsAppMedia({
             );
             resolve(parsed);
           } catch (e) {
+            if (res.statusCode >= 400) {
+              return reject(new Error(`WhatsApp API error (status ${res.statusCode}): ${body}`));
+            }
             console.log(`[WhatsApp API] ${typeName} response status: ${res.statusCode} body: ${body}`);
             resolve({ status: res.statusCode, body });
           }
@@ -89,5 +97,4 @@ function sendWhatsAppMedia({
 
 module.exports = {
   sendWhatsAppMedia,
-  DEFAULT_RECEIVER_NUMBER,
 };
