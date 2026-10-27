@@ -2812,7 +2812,7 @@ app.post("/api/preview", upload.single("pdf"), async (req, res) => {
     const validFields = fields.filter((f) => isValidOrderAndCustomer(f.orderNo, f.customerName));
     if (validFields.length === 0) {
       return res.status(400).json({
-        error: "Kripya thik shipping label PDF upload karein (Order ID aur Customer Name nahi mila).",
+        error: "Please upload a valid shipping label PDF (Order ID and Customer Name could not be detected).",
         code: "INVALID_LABEL_PDF",
       });
     }
