@@ -829,10 +829,10 @@ function wrapText(text, maxWidth, font, fontSize) {
 // Default templates seed
 const DEFAULT_TEMPLATES = [
   {
-    name: "Meesho Store Follower Booster",
-    description: "Encodes Meesho store page with Order No & SKU to grow followers and repeat orders.",
+    name: "Store Follower Booster",
+    description: "Encodes store page with Order No & SKU to grow followers and repeat orders.",
     enableQr: true,
-    qrText: "https://www.meesho.com",
+    qrText: "",
     detailText: "Scan to Follow our Store!\nOrder: {orderNo}\nSKU: {sku}",
     qrX: 30,
     qrY: 30,
@@ -842,12 +842,12 @@ const DEFAULT_TEMPLATES = [
     sortOrder: "asc",
   },
   {
-    name: "Instagram Direct QR Stamp",
-    description: "Directs customers to Instagram profile to claim warranty or discount coupons.",
-    enableQr: true,
-    qrText: "https://instagram.com",
-    detailText: "Scan to Follow on Instagram!\nSKU: {sku}",
-    qrX: 95,
+    name: "State-Smart Regional Thank You",
+    description: "Personalized regional language thank-you stamp based on customer destination state.",
+    enableQr: false,
+    qrText: "",
+    detailText: "Thank You for Shopping with Us!\n{regionalThankYou}\nOrder: {orderNo} | SKU: {sku}",
+    qrX: 30,
     qrY: 30,
     qrSize: 85,
     fontSize: 8,
