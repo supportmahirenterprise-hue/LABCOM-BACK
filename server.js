@@ -100,9 +100,126 @@ process.on("uncaughtException", (err) => {
 });
 
 const app = express();
+
+// ---- HARDENED SERVER IDENTIFIERS & SECURITY HEADERS ----
+app.disable("x-powered-by");
+
+const INTERNAL_API_SECRET =
+  process.env.INTERNAL_API_SECRET || "veloura-labelpro-internal-secure-key-2026";
+
+// HTTP Security Headers
+app.use((req, res, next) => {
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("X-Frame-Options", "SAMEORIGIN");
+  res.setHeader("X-XSS-Protection", "1; mode=block");
+  res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
+  res.setHeader("Strict-Transport-Security", "max-age=63072000; includeSubDomains; preload");
+  next();
+});
+
+// Malicious Vulnerability Scanner & Scraper Blocker
+const MALICIOUS_SCANNER_REGEX = /sqlmap|nikto|masscan|zgrab|acunetix|dirbuster|nmap|morfeus|censys|shodan|scrapy/i;
+app.use((req, res, next) => {
+  const ua = req.headers["user-agent"] || "";
+  const isInternal = req.headers["x-internal-secret"] === INTERNAL_API_SECRET;
+  if (!isInternal && MALICIOUS_SCANNER_REGEX.test(ua)) {
+    return res.status(403).json({
+      error: "ACCESS_DENIED",
+      message: "Automated vulnerability scanners and scrapers are strictly prohibited.",
+    });
+  }
+  next();
+});
+
+// High-Performance Sliding Window Rate Limiter
+const rateLimitStore = new Map();
+const RATE_LIMIT_WINDOW_MS = 60 * 1000; // 1 minute window
+const MAX_REQUESTS_GENERAL = 200; // 200 general requests / minute
+const MAX_REQUESTS_HEAVY = 50; // 50 heavy PDF / QR / Summary requests / minute
+
+setInterval(() => {
+  const now = Date.now();
+  for (const [key, record] of rateLimitStore.entries()) {
+    if (now - record.windowStart > RATE_LIMIT_WINDOW_MS) {
+      rateLimitStore.delete(key);
+    }
+  }
+}, 2 * 60 * 1000);
+
+app.use((req, res, next) => {
+  // Allow healthcheck and internal Next.js server calls without throttling
+  if (
+    req.path === "/health" ||
+    req.path === "/api/health" ||
+    req.headers["x-internal-secret"] === INTERNAL_API_SECRET
+  ) {
+    return next();
+  }
+
+  const clientIp = (
+    req.headers["x-forwarded-for"] ||
+    req.socket?.remoteAddress ||
+    "127.0.0.1"
+  ).split(",")[0].trim();
+
+  // Exclude localhost
+  if (clientIp === "127.0.0.1" || clientIp === "::1") {
+    return next();
+  }
+
+  const now = Date.now();
+  const isHeavy =
+    req.path.includes("process-pdf") ||
+    req.path.includes("preview") ||
+    req.path.includes("generate-summary") ||
+    req.path.includes("extract");
+
+  const limit = isHeavy ? MAX_REQUESTS_HEAVY : MAX_REQUESTS_GENERAL;
+  const storeKey = `${clientIp}_${isHeavy ? "heavy" : "gen"}`;
+
+  let record = rateLimitStore.get(storeKey);
+  if (!record || now - record.windowStart > RATE_LIMIT_WINDOW_MS) {
+    record = { windowStart: now, count: 1 };
+  } else {
+    record.count++;
+  }
+  rateLimitStore.set(storeKey, record);
+
+  res.setHeader("X-RateLimit-Limit", limit);
+  res.setHeader("X-RateLimit-Remaining", Math.max(0, limit - record.count));
+
+  if (record.count > limit) {
+    return res.status(429).json({
+      error: "TOO_MANY_REQUESTS",
+      message: "Rate limit exceeded. Please wait a moment before sending more requests.",
+    });
+  }
+
+  next();
+});
+
+// Smart CORS Origin Validator
+const ALLOWED_CORS_ORIGINS = [
+  process.env.FRONTEND_URL,
+  "https://labelpro.in",
+  "https://www.labelpro.in",
+  "http://localhost:3000",
+  "http://localhost:5001",
+  "http://127.0.0.1:3000",
+].filter(Boolean);
+
 app.use(
   cors({
-    origin: "*",
+    origin: function (origin, callback) {
+      if (!origin) return callback(null, true);
+      if (
+        ALLOWED_CORS_ORIGINS.includes(origin) ||
+        process.env.NODE_ENV !== "production"
+      ) {
+        return callback(null, true);
+      }
+      return callback(new Error("CORS policy violation: Unauthorized origin"));
+    },
     methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allowedHeaders: [
       "Content-Type",
@@ -114,6 +231,7 @@ app.use(
       "x-api-key",
       "x-user-id",
     ],
+    credentials: true,
   })
 );
 app.options("*", cors());
@@ -156,6 +274,10 @@ setInterval(() => syncBackendBlockedUsers().catch(() => {}), BLOCKED_USERS_SYNC_
 
 // Internal sync endpoint called by Admin Block route
 app.post("/api/internal/block-sync", (req, res) => {
+  const secret = req.headers["x-internal-secret"];
+  if (process.env.NODE_ENV === "production" && secret !== INTERNAL_API_SECRET) {
+    return res.status(403).json({ error: "Access Denied: Internal authorization required." });
+  }
   try {
     const { email, isBlocked } = req.body || {};
     if (email && typeof email === "string") {
@@ -4209,13 +4331,34 @@ async function isAccountSuspended(email) {
   return false;
 }
 
+function verifyAdminRequest(req, res) {
+  const secret = req.headers["x-internal-secret"];
+  const activeEmail = getUserEmail(req);
+  const isSuper = isSuperAdminUser(activeEmail);
+
+  if (process.env.NODE_ENV === "production") {
+    if (secret !== INTERNAL_API_SECRET || !isSuper) {
+      res.status(403).json({ error: "Access Denied: SuperAdmin privileges and internal authorization required." });
+      return null;
+    }
+    return activeEmail;
+  }
+
+  const host = req.headers["host"] || "";
+  const isLocalhost = host.includes("localhost") || host.includes("127.0.0.1");
+  if ((secret === INTERNAL_API_SECRET && isSuper) || (isLocalhost && isSuper)) {
+    return activeEmail;
+  }
+
+  res.status(403).json({ error: "Access Denied: SuperAdmin privileges required." });
+  return null;
+}
+
 // 1. GET /api/admin/stats - SuperAdmin platform metrics
 app.get("/api/admin/stats", async (req, res) => {
   try {
-    const activeEmail = getUserEmail(req);
-    if (!isSuperAdminUser(activeEmail)) {
-      return res.status(403).json({ error: "Access Denied: SuperAdmin privileges required." });
-    }
+    const activeEmail = verifyAdminRequest(req, res);
+    if (!activeEmail) return;
 
     const db = await getDb();
     const [
@@ -4288,10 +4431,8 @@ app.get("/api/admin/stats", async (req, res) => {
 // 2. GET /api/admin/users - SuperAdmin user directory with live settings & stats
 app.get("/api/admin/users", async (req, res) => {
   try {
-    const activeEmail = getUserEmail(req);
-    if (!isSuperAdminUser(activeEmail)) {
-      return res.status(403).json({ error: "Access Denied: SuperAdmin privileges required." });
-    }
+    const activeEmail = verifyAdminRequest(req, res);
+    if (!activeEmail) return;
 
     const db = await getDb();
     const [rawUsers, rawSettings, customerAgg, returnsAgg, ordersAgg, scansAgg] =
@@ -4451,10 +4592,8 @@ app.get("/api/admin/users", async (req, res) => {
 // GET /api/admin/drilldown - Inspect raw customer, order, scan, and return records for any user
 app.get("/api/admin/drilldown", async (req, res) => {
   try {
-    const activeEmail = getUserEmail(req);
-    if (!isSuperAdminUser(activeEmail)) {
-      return res.status(403).json({ error: "Access Denied: SuperAdmin privileges required." });
-    }
+    const activeEmail = verifyAdminRequest(req, res);
+    if (!activeEmail) return;
 
     const targetEmail = (req.query.targetEmail || "").toLowerCase().trim();
     const type = (req.query.type || "customers").toLowerCase().trim();
@@ -4562,10 +4701,8 @@ app.get("/api/admin/drilldown", async (req, res) => {
 // 3. POST /api/admin/users/settings - SuperAdmin updates any user's settings
 app.post("/api/admin/users/settings", async (req, res) => {
   try {
-    const activeEmail = getUserEmail(req);
-    if (!isSuperAdminUser(activeEmail)) {
-      return res.status(403).json({ error: "Access Denied: SuperAdmin privileges required." });
-    }
+    const activeEmail = verifyAdminRequest(req, res);
+    if (!activeEmail) return;
 
     const body = req.body || {};
     const targetEmail = (body.email || "").toLowerCase().trim();
@@ -4653,10 +4790,8 @@ app.post("/api/admin/users/settings", async (req, res) => {
 // 4. POST /api/admin/users/block - SuperAdmin blocks or unblocks a user
 app.post("/api/admin/users/block", async (req, res) => {
   try {
-    const activeEmail = getUserEmail(req);
-    if (!isSuperAdminUser(activeEmail)) {
-      return res.status(403).json({ error: "Access Denied: SuperAdmin privileges required." });
-    }
+    const activeEmail = verifyAdminRequest(req, res);
+    if (!activeEmail) return;
 
     const body = req.body || {};
     const targetEmail = (body.email || "").toLowerCase().trim();
@@ -4724,8 +4859,13 @@ app.use((err, req, res, next) => {
   if (res.headersSent) {
     return next(err);
   }
-  res.status(err.status || 500).json({
-    error: err.message || "An unexpected error occurred on the server.",
+  const isProd = process.env.NODE_ENV === "production";
+  const statusCode = err.status || 500;
+  const safeMessage = isProd && statusCode === 500
+    ? "An unexpected error occurred on the server. Please try again later."
+    : (err.message || "An unexpected error occurred on the server.");
+  res.status(statusCode).json({
+    error: safeMessage,
   });
 });
 
