@@ -323,6 +323,7 @@ function parseMeeshoPage(text, lines, regionalInfo, actualPageNumber) {
 
   // 3. Customer Name & Address
   let customerName =
+    get(text, /Customer Name\s*[:\s]*[\r\n]*\s*([^\r\n]+)/i) ||
     get(text, /Customer Address\s*[:\s]*[\r\n]+\s*([^\r\n]+)/i) ||
     get(text, /BILL TO\s*[:\s]*[\r\n]*\s*([^\r\n]+)/i) ||
     "";

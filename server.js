@@ -77,11 +77,21 @@ async function ensureDatabaseIndexes() {
   try {
     const db = await getDb();
     await Promise.all([
+      db.collection("customers").createIndex({ userEmail: 1, orderCount: -1 }),
+      db.collection("customers").createIndex({ userEmail: 1, state: 1, district: 1 }),
       db.collection("customers").createIndex({ state: 1, district: 1 }),
       db.collection("customers").createIndex({ orderCount: -1 }),
+      db.collection("returns").createIndex({ userEmail: 1, returnType: 1 }),
+      db.collection("returns").createIndex({ userEmail: 1, createdAt: -1 }),
+      db.collection("return_entries").createIndex({ userEmail: 1, sku: 1 }),
       db.collection("return_entries").createIndex({ sku: 1, returnType: 1 }),
       db.collection("return_entries").createIndex({ userEmail: 1 }),
+      db.collection("history").createIndex({ email: 1, createdAt: -1 }),
+      db.collection("templates").createIndex({ email: 1, createdAt: -1 }),
+      db.collection("user_settings").createIndex({ email: 1 }, { unique: true, sparse: true }),
       db.collection("qr_scans").createIndex({ sellerEmail: 1, date: -1 }),
+      db.collection("qr_scans").createIndex({ code: 1 }),
+      db.collection("qr_tracks").createIndex({ code: 1 }, { unique: true, sparse: true }),
       db.collection("contact_inquiries").createIndex({ email: 1, createdAt: -1 }),
       db.collection("contact_inquiries").createIndex({ referenceId: 1 }),
     ]);
@@ -117,6 +127,10 @@ app.use((req, res, next) => {
   res.setHeader("Strict-Transport-Security", "max-age=63072000; includeSubDomains; preload");
   next();
 });
+
+// High-Speed HTTP Gzip/Deflate Compression
+const compression = require("compression");
+app.use(compression({ threshold: 512 }));
 
 // Smart CORS Origin Validator - Handled first so all preflights & responses carry correct headers
 const ALLOWED_CORS_ORIGINS = [
@@ -729,7 +743,7 @@ async function extractBatchPageTexts(pdfDoc, originalBuffer, batchStart, batchEn
 
     const copiedPages = await subDoc.copyPages(pdfDoc, pageIndices);
     copiedPages.forEach((cp) => subDoc.addPage(cp));
-    const subBuffer = await subDoc.save();
+    const subBuffer = await subDoc.save({ useObjectStreams: false });
 
     let pageIdxInSub = 0;
     const subTexts = new Array(count).fill("");
@@ -774,7 +788,7 @@ async function extractSinglePageText(pdfDoc, originalBuffer, pageNum) {
       const subDoc = await PDFDocument.create();
       const copied = await subDoc.copyPages(pdfDoc, [pageNum - 1]);
       subDoc.addPage(copied[0]);
-      const singleBuffer = await subDoc.save();
+      const singleBuffer = await subDoc.save({ useObjectStreams: false });
 
       let extracted = "";
       await pdfParse(singleBuffer, {
@@ -860,6 +874,14 @@ async function getPerPageText(buffer, startPage = 1, endPage = null) {
     const batchEnd = Math.min(ePage, batchStart + BATCH_SIZE - 1);
     const batchTexts = await extractBatchPageTexts(pdfDoc, buffer, batchStart, batchEnd);
     pageTexts.push(...batchTexts);
+  }
+
+  // If sub-batch parsing produced empty text, fall back directly to original buffer parser
+  if (pageTexts.length === 0 || pageTexts.every((t) => !t || !t.trim())) {
+    const fallbackTexts = await parseEntireBufferFallback(buffer, sPage, ePage);
+    if (fallbackTexts && fallbackTexts.some((t) => t && t.trim())) {
+      return fallbackTexts;
+    }
   }
 
   return pageTexts;

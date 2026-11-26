@@ -1,5 +1,5 @@
 const http = require("http");
-const { PDFDocument } = require("pdf-lib");
+const { PDFDocument, StandardFonts } = require("pdf-lib");
 
 function httpRequest(url, options = {}, bodyData = null, isMultipart = false, boundary = null) {
   return new Promise((resolve, reject) => {
@@ -118,9 +118,13 @@ async function runEdgeCasesAndStressTests() {
 
   // 1.3 Valid minimal PDF with /api/preview
   const miniDoc = await PDFDocument.create();
+  const font = await miniDoc.embedFont(StandardFonts.Helvetica);
   const page = miniDoc.addPage([288, 432]);
-  page.drawText("Order No: 849302847291_1\nCustomer Address: Surat, Gujarat\nSKU: TEST-DRESS\nQty: 1");
-  const miniPdfBytes = await miniDoc.save();
+  page.drawText(
+    "Order No: 849302847291_1\nCustomer Name: Ramesh Patel\nCustomer Address:\nRamesh Patel\nSurat, Gujarat - 395002\nSKU: TEST-DRESS\nQty: 1",
+    { font, size: 10 }
+  );
+  const miniPdfBytes = await miniDoc.save({ useObjectStreams: false });
   const validBody = buildMultipartBody({ useNativeScript: "false" }, "pdf", "valid_label.pdf", Buffer.from(miniPdfBytes), boundary);
   const validRes = await httpRequest(
     `${baseUrl}/api/preview`,
@@ -132,6 +136,7 @@ async function runEdgeCasesAndStressTests() {
     true,
     boundary
   );
+  console.log("DEBUG validRes:", validRes.statusCode, validRes.data);
   assert(validRes.statusCode === 200, "Valid PDF parses and responds HTTP 200 OK");
   assert(validRes.json.pageCount === 1, "Accurately detects 1 page in PDF");
   assert(Array.isArray(validRes.json.duplicateOrderWarnings), "duplicateOrderWarnings is an array (No ReferenceError!)");
