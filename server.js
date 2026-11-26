@@ -118,9 +118,59 @@ app.use((req, res, next) => {
   next();
 });
 
+// Smart CORS Origin Validator - Handled first so all preflights & responses carry correct headers
+const ALLOWED_CORS_ORIGINS = [
+  process.env.FRONTEND_URL,
+  "https://labelpro.in",
+  "https://www.labelpro.in",
+  "http://localhost:3000",
+  "http://localhost:5001",
+  "http://127.0.0.1:3000",
+]
+  .filter(Boolean)
+  .map((o) => o.replace(/\/+$/, "").toLowerCase());
+
+const corsOptions = {
+  origin: function (origin, callback) {
+    if (!origin) return callback(null, true);
+    const normalized = origin.replace(/\/+$/, "").toLowerCase();
+    if (
+      ALLOWED_CORS_ORIGINS.includes(normalized) ||
+      normalized.endsWith(".labelpro.in") ||
+      process.env.NODE_ENV !== "production"
+    ) {
+      return callback(null, true);
+    }
+    // Safe rejection: do not throw Error to prevent unhandled 500 crashes
+    return callback(null, false);
+  },
+  methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+  allowedHeaders: [
+    "Content-Type",
+    "Authorization",
+    "X-Requested-With",
+    "Accept",
+    "Origin",
+    "Cache-Control",
+    "Pragma",
+    "Range",
+    "If-Modified-Since",
+    "x-user-email",
+    "x-internal-secret",
+    "x-api-key",
+    "x-user-id",
+    "cf-connecting-ip",
+  ],
+  credentials: true,
+};
+
+app.use(cors(corsOptions));
+app.options("*", cors(corsOptions));
+
 // Malicious Vulnerability Scanner & Scraper Blocker
 const MALICIOUS_SCANNER_REGEX = /sqlmap|nikto|masscan|zgrab|acunetix|dirbuster|nmap|morfeus|censys|shodan|scrapy/i;
 app.use((req, res, next) => {
+  if (req.method === "OPTIONS") return next();
   const ua = req.headers["user-agent"] || "";
   const isInternal = req.headers["x-internal-secret"] === INTERNAL_API_SECRET;
   if (!isInternal && MALICIOUS_SCANNER_REGEX.test(ua)) {
@@ -135,8 +185,8 @@ app.use((req, res, next) => {
 // High-Performance Sliding Window Rate Limiter
 const rateLimitStore = new Map();
 const RATE_LIMIT_WINDOW_MS = 60 * 1000; // 1 minute window
-const MAX_REQUESTS_GENERAL = 200; // 200 general requests / minute
-const MAX_REQUESTS_HEAVY = 50; // 50 heavy PDF / QR / Summary requests / minute
+const MAX_REQUESTS_GENERAL = 600; // 600 general requests / minute
+const MAX_REQUESTS_HEAVY = 150; // 150 heavy PDF / QR / Summary requests / minute
 
 setInterval(() => {
   const now = Date.now();
@@ -148,8 +198,9 @@ setInterval(() => {
 }, 2 * 60 * 1000);
 
 app.use((req, res, next) => {
-  // Allow healthcheck and internal Next.js server calls without throttling
+  // Never rate limit OPTIONS preflights, healthcheck, or internal Next.js server calls
   if (
+    req.method === "OPTIONS" ||
     req.path === "/health" ||
     req.path === "/api/health" ||
     req.headers["x-internal-secret"] === INTERNAL_API_SECRET
@@ -157,14 +208,17 @@ app.use((req, res, next) => {
     return next();
   }
 
-  const clientIp = (
+  const rawIp =
+    req.headers["cf-connecting-ip"] ||
+    req.headers["x-real-ip"] ||
     req.headers["x-forwarded-for"] ||
     req.socket?.remoteAddress ||
-    "127.0.0.1"
-  ).split(",")[0].trim();
+    "127.0.0.1";
+
+  const clientIp = String(rawIp).split(",")[0].trim();
 
   // Exclude localhost
-  if (clientIp === "127.0.0.1" || clientIp === "::1") {
+  if (clientIp === "127.0.0.1" || clientIp === "::1" || clientIp === "::ffff:127.0.0.1") {
     return next();
   }
 
@@ -199,43 +253,6 @@ app.use((req, res, next) => {
   next();
 });
 
-// Smart CORS Origin Validator
-const ALLOWED_CORS_ORIGINS = [
-  process.env.FRONTEND_URL,
-  "https://labelpro.in",
-  "https://www.labelpro.in",
-  "http://localhost:3000",
-  "http://localhost:5001",
-  "http://127.0.0.1:3000",
-].filter(Boolean);
-
-app.use(
-  cors({
-    origin: function (origin, callback) {
-      if (!origin) return callback(null, true);
-      if (
-        ALLOWED_CORS_ORIGINS.includes(origin) ||
-        process.env.NODE_ENV !== "production"
-      ) {
-        return callback(null, true);
-      }
-      return callback(new Error("CORS policy violation: Unauthorized origin"));
-    },
-    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-    allowedHeaders: [
-      "Content-Type",
-      "Authorization",
-      "X-Requested-With",
-      "Accept",
-      "x-user-email",
-      "x-internal-secret",
-      "x-api-key",
-      "x-user-id",
-    ],
-    credentials: true,
-  })
-);
-app.options("*", cors());
 app.use(express.json({ limit: "500mb" }));
 app.use(express.urlencoded({ limit: "500mb", extended: true }));
 

@@ -1,4 +1,4 @@
-const { MongoClient, ServerApiVersion } = require("mongodb");
+const { MongoClient } = require("mongodb");
 const fs = require("fs");
 const path = require("path");
 
@@ -49,28 +49,38 @@ function getClientPromise() {
     return null;
   }
 
-  if (!clientPromise) {
-    const options = {
-      serverApi: {
-        version: ServerApiVersion.v1,
-        strict: true,
-        deprecationErrors: true,
-      },
-    };
-
-    client = new MongoClient(uri, options);
-    clientPromise = client
-      .connect()
-      .then((c) => {
-        console.log("✅ Connected to MongoDB successfully.");
-        return c;
-      })
-      .catch((err) => {
-        console.error("❌ MongoDB connection error:", err.message || err);
-        clientPromise = null;
-        throw err;
-      });
+  // If client exists and is connected, reuse existing promise
+  if (client && client.topology && client.topology.isConnected()) {
+    return clientPromise;
   }
+
+  // Reset stale client or promise
+  client = null;
+  clientPromise = null;
+
+  const options = {
+    maxPoolSize: 25,
+    minPoolSize: 2,
+    maxIdleTimeMS: 30000,
+    serverSelectionTimeoutMS: 10000,
+    connectTimeoutMS: 15000,
+    retryWrites: true,
+    retryReads: true,
+  };
+
+  client = new MongoClient(uri, options);
+  clientPromise = client
+    .connect()
+    .then((c) => {
+      console.log("✅ Connected to MongoDB successfully.");
+      return c;
+    })
+    .catch((err) => {
+      console.error("❌ MongoDB connection error:", err.message || err);
+      client = null;
+      clientPromise = null;
+      throw err;
+    });
 
   return clientPromise;
 }
@@ -84,7 +94,7 @@ async function getDb() {
     throw new Error("MongoDB client is not configured. Please check MONGODB_URI.");
   }
   const connectedClient = await cp;
-  return connectedClient.db();
+  return connectedClient.db("labelpro");
 }
 
-module.exports = { getDb, clientPromise };
+module.exports = { getDb, clientPromise, getClientPromise };
