@@ -28,44 +28,29 @@ jobs:
             echo "=== 2. Cleaning old GitHub Actions Runner backups & caches ==="
             for RUNNER_DIR in /home/githubrunner/actions-runner /root/actions-runner; do
               if [ -d "$RUNNER_DIR" ]; then
-                # Remove stale versioned externals directories keeping only active externals
                 find "$RUNNER_DIR" -maxdepth 1 -name "externals.*" -type d -exec rm -rf {} + 2>/dev/null || true
-                # Remove runner updater temp downloads
                 rm -rf "$RUNNER_DIR/_work/_update" 2>/dev/null || true
-                # Remove old runner diagnostic logs older than 2 days
                 find "$RUNNER_DIR/_diag" -name "*.log" -mtime +2 -delete 2>/dev/null || true
               fi
             done
 
-            echo "=== 3. Setting up daily auto-clean cron job ==="
-            cat << 'EOF' > /etc/cron.daily/droplet-autoclean
-#!/bin/bash
-journalctl --vacuum-time=2d >/dev/null 2>&1
-pm2 flush >/dev/null 2>&1
-for R_DIR in /home/githubrunner/actions-runner /root/actions-runner; do
-  if [ -d "$R_DIR" ]; then
-    find "$R_DIR" -maxdepth 1 -name "externals.*" -type d -exec rm -rf {} + 2>/dev/null
-    rm -rf "$R_DIR/_work/_update" 2>/dev/null
-    find "$R_DIR/_diag" -name "*.log" -mtime +2 -delete 2>/dev/null
-  fi
-done
-apt-get clean >/dev/null 2>&1
-rm -rf /root/.npm/_logs/* /tmp/* >/dev/null 2>&1
-EOF
-            chmod +x /etc/cron.daily/droplet-autoclean || true
-
-            echo "=== 4. Disk Space After Cleanup ==="
-            df -h /
-
-            echo "=== 5. Pulling and restarting LABCOM-BACK ==="
+            echo "=== 3. Pulling and rebuilding LABCOM-BACK ==="
             cd /root/LABCOM-BACK
             git clean -fd || true
             git reset --hard HEAD || true
             git pull origin main
+
+            echo "=== 4. Installing daily auto-clean cron job ==="
+            if [ -f "/root/LABCOM-BACK/scripts/droplet_autoclean.sh" ]; then
+              cp /root/LABCOM-BACK/scripts/droplet_autoclean.sh /etc/cron.daily/droplet-autoclean
+              chmod +x /etc/cron.daily/droplet-autoclean
+            fi
+
+            echo "=== 5. Restarting LABCOM-BACK on PM2 ==="
             npm install --omit=dev
             pm2 describe LABCOM-BACK > /dev/null 2>&1 && pm2 restart LABCOM-BACK --update-env || pm2 start server.js --name LABCOM-BACK
             pm2 save
             pm2 status
 
-
-
+            echo "=== 6. Disk Space After Complete Cleanup ==="
+            df -h /
