@@ -24,17 +24,40 @@ jobs:
             rm -rf /root/.npm/_logs/* || true
             rm -rf /tmp/* || true
             apt-get clean || true
+
+            echo "=== 2. Cleaning old GitHub Actions Runner backups & caches ==="
+            for RUNNER_DIR in /home/githubrunner/actions-runner /root/actions-runner; do
+              if [ -d "$RUNNER_DIR" ]; then
+                # Remove stale versioned externals directories keeping only active externals
+                find "$RUNNER_DIR" -maxdepth 1 -name "externals.*" -type d -exec rm -rf {} + 2>/dev/null || true
+                # Remove runner updater temp downloads
+                rm -rf "$RUNNER_DIR/_work/_update" 2>/dev/null || true
+                # Remove old runner diagnostic logs older than 2 days
+                find "$RUNNER_DIR/_diag" -name "*.log" -mtime +2 -delete 2>/dev/null || true
+              fi
+            done
+
+            echo "=== 3. Setting up daily auto-clean cron job ==="
+            cat << 'EOF' > /etc/cron.daily/droplet-autoclean
+#!/bin/bash
+journalctl --vacuum-time=2d >/dev/null 2>&1
+pm2 flush >/dev/null 2>&1
+for R_DIR in /home/githubrunner/actions-runner /root/actions-runner; do
+  if [ -d "$R_DIR" ]; then
+    find "$R_DIR" -maxdepth 1 -name "externals.*" -type d -exec rm -rf {} + 2>/dev/null
+    rm -rf "$R_DIR/_work/_update" 2>/dev/null
+    find "$R_DIR/_diag" -name "*.log" -mtime +2 -delete 2>/dev/null
+  fi
+done
+apt-get clean >/dev/null 2>&1
+rm -rf /root/.npm/_logs/* /tmp/* >/dev/null 2>&1
+EOF
+            chmod +x /etc/cron.daily/droplet-autoclean || true
+
+            echo "=== 4. Disk Space After Cleanup ==="
             df -h /
 
-            echo "=== 2. Disk Space Usage Analysis ==="
-            echo "--- Top Folders in /root ---"
-            du -sh /root/* 2>/dev/null | sort -rh | head -15 || true
-            echo "--- System & Cache Folders ---"
-            du -sh /var/log /var/lib/snapd /root/.pm2 /root/.npm /var/lib/docker 2>/dev/null || true
-            echo "--- Top 15 Largest Files/Folders on Server ---"
-            du -ahx / 2>/dev/null | sort -rh | head -15 || true
-
-            echo "=== 3. Pulling and restarting LABCOM-BACK ==="
+            echo "=== 5. Pulling and restarting LABCOM-BACK ==="
             cd /root/LABCOM-BACK
             git clean -fd || true
             git reset --hard HEAD || true
