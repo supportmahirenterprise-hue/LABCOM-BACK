@@ -31,6 +31,8 @@ jobs:
             git reset --hard HEAD || true
             git pull origin main
             npm install --omit=dev
-            pm2 restart LABCOM-BACK --update-env
-            pm2 status LABCOM-BACK
+            pm2 describe LABCOM-BACK > /dev/null 2>&1 && pm2 restart LABCOM-BACK --update-env || pm2 start server.js --name LABCOM-BACK
+            pm2 save
+            pm2 status
+
 
