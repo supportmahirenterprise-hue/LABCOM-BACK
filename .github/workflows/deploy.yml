@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - main
+  workflow_dispatch:
 
 jobs:
   deploy:
@@ -25,7 +26,15 @@ jobs:
             apt-get clean || true
             df -h /
 
-            echo "=== 2. Pulling and restarting LABCOM-BACK ==="
+            echo "=== 2. Disk Space Usage Analysis ==="
+            echo "--- Top Folders in /root ---"
+            du -sh /root/* 2>/dev/null | sort -rh | head -15 || true
+            echo "--- System & Cache Folders ---"
+            du -sh /var/log /var/lib/snapd /root/.pm2 /root/.npm /var/lib/docker 2>/dev/null || true
+            echo "--- Top 15 Largest Files/Folders on Server ---"
+            du -ahx / 2>/dev/null | sort -rh | head -15 || true
+
+            echo "=== 3. Pulling and restarting LABCOM-BACK ==="
             cd /root/LABCOM-BACK
             git clean -fd || true
             git reset --hard HEAD || true
@@ -34,5 +43,6 @@ jobs:
             pm2 describe LABCOM-BACK > /dev/null 2>&1 && pm2 restart LABCOM-BACK --update-env || pm2 start server.js --name LABCOM-BACK
             pm2 save
             pm2 status
+
 
 
