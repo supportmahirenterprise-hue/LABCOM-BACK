@@ -16,7 +16,21 @@ jobs:
           username: root
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           script: |
+            echo "=== 1. Freeing disk space on droplet ==="
+            journalctl --vacuum-time=1d || true
+            pm2 flush || true
+            npm cache clean --force || true
+            rm -rf /root/.npm/_logs/* || true
+            rm -rf /tmp/* || true
+            apt-get clean || true
+            df -h /
+
+            echo "=== 2. Pulling and restarting LABCOM-BACK ==="
             cd /root/LABCOM-BACK
+            git clean -fd || true
+            git reset --hard HEAD || true
             git pull origin main
-            npm install
-            pm2 restart LABCOM-BACK
+            npm install --omit=dev
+            pm2 restart LABCOM-BACK --update-env
+            pm2 status LABCOM-BACK
+
